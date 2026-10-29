@@ -6,3 +6,5 @@ scipy>=1.11
 scanpy>=1.10,<2
 scrublet>=0.2.3,<0.3
 starcatpy>=1.0.10,<2
+pymc>=5.20,<6
+arviz>=0.20,<1
