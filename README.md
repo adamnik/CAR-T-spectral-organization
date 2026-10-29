@@ -2,6 +2,20 @@
 
 This repository contains the preprocessing and statistical analysis code for the CAR T-cell spectral organization framework.
 
+## Patient-level TCAT extraction
+
+`extract_tcat_patient_particles.py` reads one processed TCAT AnnData dataset and creates outcome-blind patient estimates and Bayesian-bootstrap particles. GEP usages and multinomial cell-label proportions are CLR-transformed. ASA and Proliferation are reconstructed from their predefined component CLR GEPs rather than estimated independently.
+
+```bash
+python extract_tcat_patient_particles.py \
+  processed_dataset_TCAT.h5ad \
+  results/dataset_tcat_particles \
+  --dataset-name DatasetName \
+  --sample-key sample_id
+```
+
+The script produces `tcat_patient_estimates.csv`, `tcat_patient_uncertainty.csv`, `tcat_patient_particles.npz`, and a complete extraction manifest. Run it independently for each dataset, using a common categorical-level schema when combining cohorts.
+
 ## Patient-level O-lambda inference
 
 `fit_olambda_asymptotes.R` fits the second-order spectral-tail model
