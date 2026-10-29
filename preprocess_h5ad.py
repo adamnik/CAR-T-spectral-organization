@@ -206,15 +206,19 @@ def main():
     adata = ad.read_h5ad(args.input_h5ad)
     print(f"Loaded {args.input_h5ad}: {adata.n_obs:,} cells x {adata.n_vars:,} genes")
 
-    adata = select_count_source(adata, args.count_source)
     if not adata.obs_names.is_unique:
         adata.obs_names_make_unique()
         print("Made duplicated observation names unique.")
+    adata = select_count_source(adata, args.count_source)
+    if not adata.obs_names.is_unique:
+        raise RuntimeError("Observation names are not unique after count-source selection.")
 
     adata.var_names = pd.Index(adata.var_names.astype(str).str.strip())
     if (adata.var_names == "").any():
         raise ValueError("One or more genes have empty names.")
     adata = collapse_duplicate_genes(adata)
+    if not adata.var_names.is_unique:
+        raise RuntimeError("Gene names are not unique after duplicate-gene collapse.")
     adata.obs["timepoint"] = "infusion"
 
     n_before_qc = adata.n_obs

@@ -373,8 +373,13 @@ def main():
     if not adata.obs_names.is_unique:
         adata.obs_names_make_unique()
         print("Made duplicated observation names unique.")
+    if not adata.obs_names.is_unique:
+        raise RuntimeError("Observation names are not unique after repair.")
     if not adata.var_names.is_unique:
-        raise ValueError("Input gene names are duplicated. Run preprocess_h5ad.py first.")
+        raise ValueError(
+            "Input gene names are duplicated. Exact duplicates must be collapsed by "
+            "preprocess_h5ad.py rather than renamed with var_names_make_unique()."
+        )
 
     info_path, aliases_path = string_paths(
         args.string_dir,

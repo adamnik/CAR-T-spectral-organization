@@ -132,8 +132,13 @@ def main():
     if not adata.obs_names.is_unique:
         adata.obs_names_make_unique()
         print("Made duplicated observation names unique.")
+    if not adata.obs_names.is_unique:
+        raise RuntimeError("Observation names are not unique after repair.")
     if not adata.var_names.is_unique:
-        raise ValueError("Input gene names must be unique before running TCAT.")
+        raise ValueError(
+            "Input gene names must be unique before running TCAT. Do not suffix duplicated "
+            "genes; collapse them during preprocessing and canonicalize them with STRING."
+        )
 
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     tcat = starCAT(reference=args.reference, cachedir=str(args.cache_dir))
