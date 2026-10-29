@@ -1,0 +1,35 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local data, generated outputs, and model artifacts
+data/
+outputs/
+results/
+figures/
+checkpoints/
+*.h5ad
+*.h5
+*.npz
+*.nc
+*.pkl
+*.joblib
+
+# Local configuration may contain machine-specific paths
+configs/local.yaml
+configs/*.local.yaml
