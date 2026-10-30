@@ -280,7 +280,7 @@ def main():
     parser.add_argument("outcomes_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--mode", choices=["individual", "joint-gep", "joint-cell-type"], required=True)
-    parser.add_argument("--minimum-cells", type=int, default=50)
+    parser.add_argument("--minimum-cells", type=int, default=1000)
     parser.add_argument("--feature", action="append", default=None)
     parser.add_argument("--feature-kind", choices=["all", "gep", "score", "cell_type"], default="all")
     parser.add_argument("--maximum-features", type=int, default=None)
