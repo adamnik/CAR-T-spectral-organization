@@ -23,7 +23,7 @@ def main():
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--minimum-cells", type=int, default=1000)
     parser.add_argument("--n-particles", type=int, default=16)
-    parser.add_argument("--draws", type=int, default=1500)
+    parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
     parser.add_argument("--chains", type=int, default=4)
     parser.add_argument("--cores", type=int, default=4)

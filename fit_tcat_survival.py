@@ -284,7 +284,7 @@ def main():
     parser.add_argument("--feature", action="append", default=None)
     parser.add_argument("--feature-kind", choices=["all", "gep", "score", "cell_type"], default="all")
     parser.add_argument("--maximum-features", type=int, default=None)
-    parser.add_argument("--draws", type=int, default=1500)
+    parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
     parser.add_argument("--chains", type=int, default=4)
     parser.add_argument("--cores", type=int, default=4)

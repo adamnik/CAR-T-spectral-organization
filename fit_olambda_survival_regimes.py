@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--crossover-quantile-low", type=float, default=0.10)
     parser.add_argument("--crossover-quantile-high", type=float, default=0.90)
     parser.add_argument("--transition-scale-sd", type=float, default=0.10)
-    parser.add_argument("--draws", type=int, default=1500)
+    parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
     parser.add_argument("--chains", type=int, default=4)
     parser.add_argument("--cores", type=int, default=4)
