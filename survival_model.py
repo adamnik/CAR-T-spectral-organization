@@ -1,4 +1,4 @@
-# Shared calculations for the two survival models
+# Shared calculations for the Bayesian survival models
 
 import arviz as az
 import numpy as np
@@ -81,6 +81,73 @@ def load_olambda_analysis(asymptote_path, outcome_path, minimum_cells, n_particl
     return data, raw_particles, standardized_particles, particle_weights, scaling
 
 
+def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cells):
+    """Match patient TCAT particles, central estimates, and survival outcomes."""
+    estimates = pd.read_csv(estimates_path)
+    outcomes = pd.read_csv(outcome_path)
+    if "event_observed" not in outcomes.columns and "event" in outcomes.columns:
+        outcomes = outcomes.rename(columns={"event": "event_observed"})
+
+    archive = np.load(particles_path, allow_pickle=False)
+    values = np.asarray(archive["values"], dtype=float)
+    particle_weights = np.asarray(archive["particle_weights"], dtype=float)
+    patient_ids = archive["patient_ids"].astype(str)
+    datasets = archive["datasets"].astype(str)
+    feature_names = archive["feature_names"].astype(str).tolist()
+    n_cells = np.asarray(archive["n_cells"], dtype=int)
+
+    particle_index = pd.DataFrame(
+        {
+            "Dataset": datasets,
+            "sample_id": patient_ids,
+            "n_cells": n_cells,
+            "particle_index": np.arange(len(patient_ids)),
+        }
+    )
+    data = particle_index.merge(
+        estimates[["Dataset", "sample_id", *feature_names]],
+        on=["Dataset", "sample_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+    outcome_columns = ["Dataset", "sample_id", "event_observed", "t_start", "t_end"]
+    data = data.merge(
+        outcomes[outcome_columns],
+        on=["Dataset", "sample_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+
+    numeric_columns = ["n_cells", "event_observed", "t_start", "t_end", *feature_names]
+    for column in numeric_columns:
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+    data = data.dropna(subset=numeric_columns).copy()
+    keep = (
+        (data.n_cells >= minimum_cells)
+        & data.event_observed.isin([0, 1])
+        & (data.t_end > 0)
+        & (data.t_end >= data.t_start)
+    )
+    data = data.loc[keep].sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
+    if data.empty:
+        raise ValueError("No patients satisfy the TCAT analysis requirements.")
+    if data.t_end.max() > TIME_EDGES[-1]:
+        raise ValueError(f"Follow-up extends beyond the last time edge ({TIME_EDGES[-1]} months).")
+
+    order = data.particle_index.to_numpy(int)
+    values = values[order]
+    particle_weights = particle_weights[order]
+    if values.shape[:2] != particle_weights.shape or values.shape[2] != len(feature_names):
+        raise ValueError("TCAT particle dimensions do not match the saved metadata.")
+    if np.any(~np.isfinite(values)) or np.any(~np.isfinite(particle_weights)):
+        raise ValueError("TCAT particles and weights must be finite.")
+    particle_weights = particle_weights / particle_weights.sum(axis=1, keepdims=True)
+    central = data[feature_names].to_numpy(float)
+    data = data.drop(columns="particle_index")
+    data.event_observed = data.event_observed.astype("int32")
+    return data, central, values, particle_weights, feature_names
+
+
 def exposure(start, end):
     """Months spent in each hazard bin between start and end."""
     start = np.asarray(start, dtype=float)
@@ -123,16 +190,7 @@ def model_coordinates(data, arrays):
     }
 
 
-def hierarchical_parameters(arrays):
-    global_effect = pm.Normal("global_effect", 0.0, GLOBAL_EFFECT_SD)
-    dataset_effect_sd = pm.HalfNormal("dataset_effect_sd", DATASET_EFFECT_SD)
-    dataset_effect_raw = pm.Normal('dataset_effect_raw', 0.0, 1.0, dims='dataset')
-    dataset_effect = pm.Deterministic(
-        "dataset_effect",
-        global_effect + dataset_effect_sd * dataset_effect_raw,
-        dims="dataset",
-    )
-
+def baseline_parameters(arrays):
     baseline_initial = pm.Normal(
         "baseline_log_rate_initial",
         np.log(BASELINE_RATE_MEDIAN),
@@ -157,7 +215,20 @@ def hierarchical_parameters(arrays):
     )
 
     dataset_index = pt.as_tensor_variable(arrays["dataset_index"])
-    return baseline_log_rate[dataset_index], dataset_effect[dataset_index]
+    return baseline_log_rate[dataset_index]
+
+
+def hierarchical_parameters(arrays):
+    global_effect = pm.Normal("global_effect", 0.0, GLOBAL_EFFECT_SD)
+    dataset_effect_sd = pm.HalfNormal("dataset_effect_sd", DATASET_EFFECT_SD)
+    dataset_effect_raw = pm.Normal('dataset_effect_raw', 0.0, 1.0, dims='dataset')
+    dataset_effect = pm.Deterministic(
+        "dataset_effect",
+        global_effect + dataset_effect_sd * dataset_effect_raw,
+        dims="dataset",
+    )
+    dataset_index = pt.as_tensor_variable(arrays["dataset_index"])
+    return baseline_parameters(arrays), dataset_effect[dataset_index]
 
 
 def interval_loglikelihood(hazard, arrays):
@@ -205,6 +276,16 @@ def effect_summary(effect):
     }
 
 
+def alignment_summary(dataset_effect):
+    all_positive = np.all(dataset_effect > 0, axis=1)
+    all_negative = np.all(dataset_effect < 0, axis=1)
+    return {
+        "P_all_datasets_gt_0": float(np.mean(all_positive)),
+        "P_all_datasets_lt_0": float(np.mean(all_negative)),
+        "P_all_datasets_same_direction": float(np.mean(all_positive | all_negative)),
+    }
+
+
 def summarize_effects(idata, datasets):
     global_effect = np.asarray(idata.posterior.global_effect).reshape(-1)
     dataset_effect = idata.posterior.dataset_effect.stack(sample=('chain', 'draw'))
@@ -213,7 +294,7 @@ def summarize_effects(idata, datasets):
 
     result = effect_summary(global_effect)
     result["dataset_effect_sd_median"] = float(np.median(heterogeneity))
-    result["P_all_datasets_gt_0"] = float(np.mean(np.all(dataset_effect > 0, axis=1)))
+    result.update(alignment_summary(dataset_effect))
     dataset_rows = []
     for index, dataset in enumerate(datasets):
         dataset_rows.append({"Dataset": dataset, **effect_summary(dataset_effect[:, index])})

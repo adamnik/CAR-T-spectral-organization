@@ -28,6 +28,37 @@ python extract_tcat_patient_particles.py \
 
 The script produces `tcat_patient_estimates.csv`, `tcat_patient_uncertainty.csv`, `tcat_patient_particles.npz`, and a complete extraction manifest. Run it independently for each dataset, using a common categorical-level schema when combining cohorts.
 
+## TCAT survival models
+
+`fit_tcat_survival.py` uses the combined patient estimates and coherent Bayesian-bootstrap particles in the same interval-censored survival framework used for spectral organization. Three modes are available:
+
+```bash
+python fit_tcat_survival.py \
+  all_patient_TCAT_estimates.csv \
+  all_patient_TCAT_particles.npz \
+  clinical_outcomes.csv \
+  results/tcat_individual \
+  --mode individual
+
+python fit_tcat_survival.py \
+  all_patient_TCAT_estimates.csv \
+  all_patient_TCAT_particles.npz \
+  clinical_outcomes.csv \
+  results/tcat_joint_gep \
+  --mode joint-gep
+
+python fit_tcat_survival.py \
+  all_patient_TCAT_estimates.csv \
+  all_patient_TCAT_particles.npz \
+  clinical_outcomes.csv \
+  results/tcat_joint_cell_type \
+  --mode joint-cell-type
+```
+
+The individual models estimate a global effect and hierarchically pooled dataset effects for every GEP, derived score, and cell proportion. Their outputs include the posterior probabilities that all dataset effects are adverse, all are protective, or all share either direction. Individual fits are checkpointed by feature and can be resumed.
+
+The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; cell-label proportions are constrained separately within each label composition. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
+
 ## Patient-level O-lambda inference
 
 `fit_olambda_asymptotes.R` fits the second-order spectral-tail model

@@ -21,6 +21,7 @@ from scipy.stats import t
 
 import extract_tcat_patient_particles as extraction
 import filter_string as string
+import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
 import run_tcat as tcat
 import survival_model as survival
@@ -146,7 +147,60 @@ class AnalysisChecks(unittest.TestCase):
         assert_allclose(overall['HR_q975'], np.quantile(np.exp(global_effect), .975))
         self.assertEqual(overall['P_effect_gt_0'], .75)
         self.assertEqual(overall['P_all_datasets_gt_0'], .5)
+        self.assertEqual(overall['P_all_datasets_lt_0'], .25)
+        self.assertEqual(overall['P_all_datasets_same_direction'], .75)
         assert_allclose(datasets.HR_median, np.median(np.exp(dataset_effect), axis=(0, 1)))
+
+    def test_tcat_survival_inputs_and_joint_scaling(self):
+        features = [
+            'TCAT_GEP_A_CLR', 'TCAT_GEP_B_CLR',
+            'TCAT_SCORE_label_proportion_CD4_CLR',
+            'TCAT_SCORE_label_proportion_CD8_CLR',
+        ]
+        patients = ['p2', 'p1', 'p3']
+        datasets = ['B', 'A', 'A']
+        central = np.array([
+            [.2, -.2, .3, -.3],
+            [.1, -.1, .1, -.1],
+            [-.2, .2, -.1, .1],
+        ])
+        delta = np.asarray([.01, -.01, .01, -.01])
+        particles = np.stack([central - delta, central + delta], axis=1)
+        weights = np.full((3, 2), .5)
+        estimates = pd.DataFrame(central, columns=features)
+        estimates.insert(0, 'sample_id', patients)
+        estimates.insert(0, 'Dataset', datasets)
+        outcomes = pd.DataFrame({
+            'Dataset': datasets, 'sample_id': patients, 'event_observed': [1, 0, 1],
+            't_start': [2., 0., 4.], 't_end': [3., 10., 4.],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            estimates_path = directory / 'estimates.csv'
+            outcomes_path = directory / 'outcomes.csv'
+            particles_path = directory / 'particles.npz'
+            estimates.to_csv(estimates_path, index=False)
+            outcomes.to_csv(outcomes_path, index=False)
+            np.savez_compressed(
+                particles_path, values=particles, particle_weights=weights,
+                patient_ids=np.asarray(patients), datasets=np.asarray(datasets),
+                feature_names=np.asarray(features), n_cells=np.asarray([500, 600, 700]),
+            )
+            data, loaded_central, loaded_particles, loaded_weights, loaded_features = (
+                survival.load_tcat_analysis(estimates_path, particles_path, outcomes_path, 50)
+            )
+        self.assertEqual(list(data.sample_id), ['p1', 'p3', 'p2'])
+        self.assertEqual(loaded_features, features)
+        assert_allclose(loaded_central, central[[1, 2, 0]])
+        assert_allclose(loaded_weights.sum(axis=1), 1.)
+
+        selected, blocks = tcat_survival.joint_features(features, 'joint-gep')
+        self.assertEqual(selected, features[:2])
+        standardized, scaling = tcat_survival.standardize_joint(
+            loaded_central[:, :2], loaded_particles[:, :, :2], selected, blocks
+        )
+        assert_allclose(standardized.sum(axis=2), 0., atol=1e-12)
+        self.assertGreater(scaling['TCAT_GEP']['scale'], 0)
 
     def test_survival_likelihood(self):
         data = pd.DataFrame({'Dataset': ['A'] * 3, 'event_observed': [1, 1, 0],
