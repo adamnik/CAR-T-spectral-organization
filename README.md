@@ -59,6 +59,20 @@ The individual models estimate a global effect and hierarchically pooled dataset
 
 The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; cell-label proportions are constrained separately within each label composition. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
 
+## Finite-depth O-lambda trajectories
+
+`extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures spectral organization across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates exact-center O-lambda.
+
+```bash
+python extract_olambda_trajectories.py \
+  processed_dataset_TCAT.h5ad \
+  results/dataset_olambda_trajectories \
+  --dataset-name DatasetName \
+  --sample-key sample_id
+```
+
+Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. The primary output, `olambda_trajectory_points.csv`, can be concatenated across datasets and passed directly to the asymptote model below. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
+
 ## Patient-level O-lambda inference
 
 `fit_olambda_asymptotes.R` fits the second-order spectral-tail model
