@@ -134,6 +134,39 @@ class AnalysisChecks(unittest.TestCase):
         assert_allclose(standardized, (raw - 2.5) / np.std([2., 3.], ddof=1))
         assert_allclose(weights.sum(axis=1), 1.)
 
+    def test_saved_olambda_particles(self):
+        estimates = pd.DataFrame({
+            'Dataset': ['B', 'A'], 'sample_id': ['p2', 'p1'],
+            'n_cells_available': [2000, 2000],
+            'O_lambda_inf_central': [3., 2.],
+        })
+        outcomes = pd.DataFrame({
+            'Dataset': ['A', 'B'], 'sample_id': ['p1', 'p2'],
+            'event_observed': [1, 0], 't_start': [3., 0.], 't_end': [6., 12.],
+        })
+        particles = pd.DataFrame({
+            'Dataset': ['B', 'A'], 'sample_id': ['p2', 'p1'],
+            **{f'particle_{i:02d}': [3 + i / 100, 2 + i / 100]
+               for i in range(1, 17)},
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            estimates_path = directory / 'patient_olambda_asymptotes.csv'
+            outcomes_path = directory / 'outcomes.csv'
+            particles_path = directory / 'patient_olambda_particles.csv'
+            estimates.to_csv(estimates_path, index=False)
+            outcomes.to_csv(outcomes_path, index=False)
+            particles.to_csv(particles_path, index=False)
+            data, raw, standardized, weights, scaling = survival.load_olambda_analysis(
+                estimates_path, outcomes_path, 1000, 16, particles_path
+            )
+        self.assertEqual(list(data.sample_id), ['p1', 'p2'])
+        assert_allclose(raw[0], 2 + np.arange(1, 17) / 100)
+        assert_allclose(raw[1], 3 + np.arange(1, 17) / 100)
+        assert_allclose(standardized, (raw - 2.5) / np.std([2., 3.], ddof=1))
+        assert_allclose(weights.sum(axis=1), 1.)
+        self.assertEqual(scaling['particle_source'], str(particles_path))
+
     def test_effect_summaries(self):
         global_effect = np.array([[-.2, .1, .3, .5]])
         dataset_effect = np.stack([global_effect, global_effect - .1], axis=-1)

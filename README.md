@@ -75,28 +75,33 @@ Patient-level checkpoints make the extraction resumable. Increasing `--point-mul
 
 ## Patient-level O-lambda inference
 
-`fit_olambda_asymptotes.R` fits the second-order spectral-tail model
+`fit_olambda_asymptotes.R` fits the latent-timescale spectral-tail model
 
 \[
 \log(\mathcal O_\lambda(n)-1)
 =
-\theta_0
-+
-\frac{\theta_1}{n/500+2}
-+
-\frac{\theta_2}{(n/500+2)^2}.
+\alpha_i+b_{1i}u_{\tau_i}(n)+b_{2i}u_{\tau_i}(n)^2,
+\qquad
+u_\tau(n)=\frac{\tau}{n/500+\tau}.
 \]
 
-The population model is fit with patient-specific random coefficients and a depth-dependent residual variance. Patient asymptotes and Student-t uncertainty intervals are then estimated by robust empirical-Bayes updating.
+The positive timescale has the shared prior
+
+\[
+\log \tau_i = \log 2 + 0.35T_3,
+\]
+
+represented by nine equal-probability quadrature nodes. Each component has patient-specific random coefficients and depth-dependent residual variance. Conditional slope deviations use a Student-t prior, while the asymptote hierarchy is shared across timescales. The script saves calibrated mixture intervals and equal-probability posterior particles for downstream uncertainty propagation.
 
 ```bash
 Rscript fit_olambda_asymptotes.R \
   olambda_trajectory_points.csv \
   results/olambda_asymptotes \
-  --minimum-cells 1000
+  --minimum-cells 1000 \
+  --n-particles 16
 ```
 
-This script requires R and the `nlme` package.
+This script requires R and the `nlme` package. Its primary outputs are `patient_olambda_asymptotes.csv` and `patient_olambda_particles.csv`.
 
 ## Continuous survival association
 
@@ -106,7 +111,8 @@ This script requires R and the `nlme` package.
 python fit_olambda_survival_continuous.py \
   results/olambda_asymptotes/patient_olambda_asymptotes.csv \
   clinical_outcomes.csv \
-  results/olambda_survival_continuous
+  results/olambda_survival_continuous \
+  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv
 ```
 
 ## Smooth survival regimes
@@ -117,7 +123,8 @@ python fit_olambda_survival_continuous.py \
 python fit_olambda_survival_regimes.py \
   results/olambda_asymptotes/patient_olambda_asymptotes.csv \
   clinical_outcomes.csv \
-  results/olambda_survival_regimes
+  results/olambda_survival_regimes \
+  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv
 ```
 
 Both survival scripts use 16 posterior particles by default. This was the lowest evaluated resolution that reproduced the continuous hazard ratio, regime hazard ratio, and crossover estimate obtained with 21 and 64 particles.

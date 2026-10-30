@@ -21,6 +21,7 @@ def main():
     parser.add_argument("asymptotes_csv", type=Path)
     parser.add_argument("outcomes_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--particles-csv", type=Path)
     parser.add_argument("--minimum-cells", type=int, default=1000)
     parser.add_argument("--n-particles", type=int, default=16)
     parser.add_argument("--draws", type=int, default=2000)
@@ -36,6 +37,7 @@ def main():
     data, _, particles, particle_weights, scaling = load_olambda_analysis(
         args.asymptotes_csv, args.outcomes_csv,
         minimum_cells=args.minimum_cells, n_particles=args.n_particles,
+        particles_path=args.particles_csv,
     )
     arrays = survival_arrays(data)
     print(
@@ -101,10 +103,7 @@ def main():
         'model': 'continuous uncertainty-marginalized O_lambda survival',
         'minimum_cells': args.minimum_cells,
         'n_particles': args.n_particles,
-        'particle_definition': (
-            "equal-probability midpoint particles from each patient's "
-            "Student-t4 posterior in log(O_lambda_inf - 1)"
-        ),
+        'particle_definition': scaling['particle_source'],
         'particle_scaling': scaling,
         'draws': args.draws,
         'tune': args.tune,

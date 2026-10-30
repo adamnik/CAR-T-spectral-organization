@@ -1,5 +1,7 @@
 # Shared calculations for the Bayesian survival models
 
+from pathlib import Path
+
 import arviz as az
 import numpy as np
 import pandas as pd
@@ -18,7 +20,9 @@ BASELINE_LOG_RATE_SD = 1.00
 BASELINE_SMOOTHNESS_SD = 0.30
 
 
-def load_olambda_analysis(asymptote_path, outcome_path, minimum_cells, n_particles):
+def load_olambda_analysis(
+    asymptote_path, outcome_path, minimum_cells, n_particles, particles_path=None
+):
     asymptotes = pd.read_csv(asymptote_path)
     outcomes = pd.read_csv(outcome_path)
     if "event_observed" not in outcomes.columns and "event" in outcomes.columns:
@@ -35,23 +39,31 @@ def load_olambda_analysis(asymptote_path, outcome_path, minimum_cells, n_particl
     numeric_columns = [
         "n_cells_available",
         "O_lambda_inf_central",
-        "log_O_minus_1_inf_location",
-        "log_O_minus_1_inf_scale",
         "event_observed",
         "t_start",
         "t_end",
     ]
+    if particles_path is None:
+        candidate = Path(asymptote_path).parent / "patient_olambda_particles.csv"
+        if candidate.exists():
+            particles_path = candidate
+    if particles_path is None:
+        numeric_columns.extend([
+            "log_O_minus_1_inf_location",
+            "log_O_minus_1_inf_scale",
+        ])
     for column in numeric_columns:
         data[column] = pd.to_numeric(data[column], errors="coerce")
     # Keep the analysis cohort
     data = data.dropna(subset=numeric_columns).copy()
     keep = (
         (data.n_cells_available >= minimum_cells)
-        & (data.log_O_minus_1_inf_scale > 0)
         & data.event_observed.isin([0, 1])
         & (data.t_end > 0)
         & (data.t_end >= data.t_start)
     )
+    if particles_path is None:
+        keep &= data.log_O_minus_1_inf_scale > 0
     data = data[keep].copy()
     data.event_observed = data.event_observed.astype("int32")
     data = data.sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
@@ -60,24 +72,56 @@ def load_olambda_analysis(asymptote_path, outcome_path, minimum_cells, n_particl
     if data.t_end.max() > TIME_EDGES[-1]:
         raise ValueError(f'Follow-up extends beyond the last time edge ({TIME_EDGES[-1]} months).')
 
+    if particles_path is not None:
+        particle_table = pd.read_csv(particles_path)
+        particle_columns = sorted(
+            column for column in particle_table if column.startswith("particle_")
+        )
+        if len(particle_columns) != n_particles:
+            raise ValueError(
+                f"Expected {n_particles} O_lambda particles, found {len(particle_columns)}."
+            )
+        particle_table = particle_table[
+            ["Dataset", "sample_id", *particle_columns]
+        ]
+        data = data.merge(
+            particle_table,
+            on=["Dataset", "sample_id"],
+            how="left",
+            validate="one_to_one",
+        ).sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
+        raw_particles = data[particle_columns].apply(
+            pd.to_numeric, errors="coerce"
+        ).to_numpy(float)
+        data = data.drop(columns=particle_columns)
+        if np.any(~np.isfinite(raw_particles)) or np.any(raw_particles <= 1):
+            raise ValueError("O_lambda particles must be finite and greater than one.")
+        particle_source = str(particles_path)
+    else:
+        # Compatibility path for older asymptote tables without saved particles
+        probabilities = (np.arange(n_particles) + 0.5) / n_particles
+        offsets = student_t.ppf(probabilities, df=FIRST_STAGE_DF)
+        z_particles = (
+            data.log_O_minus_1_inf_location.to_numpy(float)[:, None]
+            + data.log_O_minus_1_inf_scale.to_numpy(float)[:, None]
+            * offsets[None, :]
+        )
+        raw_particles = 1.0 + np.exp(z_particles)
+        particle_source = "Student-t4 approximation from asymptote summary"
+
     central = data.O_lambda_inf_central.to_numpy(float)
     center = float(central.mean())
     scale = float(central.std(ddof=1))
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError("The patient-level O_lambda scale is not positive.")
-
-    # Student-t particles for each patient
-    probabilities = (np.arange(n_particles) + 0.5) / n_particles
-    offsets = student_t.ppf(probabilities, df=FIRST_STAGE_DF)
-    z_particles = (
-        data.log_O_minus_1_inf_location.to_numpy(float)[:, None]
-        + data.log_O_minus_1_inf_scale.to_numpy(float)[:, None] * offsets[None, :]
-    )
-    raw_particles = 1.0 + np.exp(z_particles)
     standardized_particles = (raw_particles - center) / scale
     particle_weights = np.full((len(data), n_particles), 1.0 / n_particles)
 
-    scaling = {'center': center, 'scale': scale}
+    scaling = {
+        'center': center,
+        'scale': scale,
+        'particle_source': particle_source,
+    }
     return data, raw_particles, standardized_particles, particle_weights, scaling
 
 
