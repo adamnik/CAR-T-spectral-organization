@@ -1,4 +1,4 @@
-"""Apply cell QC and batch-wise Scrublet filtering to one AnnData file."""
+# Cell QC and doublet removal
 
 import argparse
 from pathlib import Path
@@ -9,49 +9,7 @@ import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Preprocess one h5ad using cell QC followed by batch-wise Scrublet."
-    )
-    parser.add_argument("input_h5ad", type=Path)
-    parser.add_argument("output_h5ad", type=Path)
-    parser.add_argument(
-        "--count-source",
-        default="X",
-        help="Count matrix to use: X, raw, or the name of an AnnData layer (default: X).",
-    )
-    parser.add_argument("--batch-key", default="sample_id")
-    parser.add_argument("--min-genes", type=int, default=200)
-    parser.add_argument("--max-genes", type=int, default=None)
-    parser.add_argument("--max-mito-pct", type=float, default=10.0)
-    parser.add_argument("--mito-prefix", default="MT-")
-    parser.add_argument("--min-batch-cells", type=int, default=50)
-    parser.add_argument("--random-state", type=int, default=0)
-    parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
-
-
-def select_count_source(adata, source):
-    if source == "X":
-        return adata
-
-    if source == "raw":
-        if adata.raw is None:
-            raise ValueError("--count-source raw was requested, but adata.raw is empty.")
-        selected = adata.raw.to_adata()
-        selected.obs = adata.obs.copy()
-        selected.obs_names = adata.obs_names.copy()
-        return selected
-
-    if source not in adata.layers:
-        available = ", ".join(map(str, adata.layers.keys())) or "none"
-        raise ValueError(
-            f"Count layer {source!r} was not found. Available layers: {available}."
-        )
-
-    adata.X = adata.layers[source].copy()
-    return adata
+from analysis_io import write_h5ad
 
 
 def collapse_duplicate_genes(adata):
@@ -59,29 +17,22 @@ def collapse_duplicate_genes(adata):
     if not gene_names.has_duplicates:
         return adata
 
-    unique_names = pd.Index(pd.unique(gene_names))
-    name_to_position = {name: i for i, name in enumerate(unique_names)}
-    group_codes = np.asarray([name_to_position[name] for name in gene_names], dtype=np.int64)
-
-    first_positions = np.full(len(unique_names), -1, dtype=np.int64)
-    for source_position, target_position in enumerate(group_codes):
-        if first_positions[target_position] == -1:
-            first_positions[target_position] = source_position
+    # Sum duplicate columns, keeping the first gene annotation
+    group_codes, unique_names = pd.factorize(gene_names, sort=False)
+    unique_names = unique_names.rename(None)
+    first_positions = np.flatnonzero(~gene_names.duplicated())
 
     if sp.issparse(adata.X):
         projection = sp.csr_matrix(
-            (
-                np.ones(adata.n_vars, dtype=adata.X.dtype),
-                (np.arange(adata.n_vars), group_codes),
-            ),
+            (np.ones(adata.n_vars, dtype=adata.X.dtype), (np.arange(adata.n_vars), group_codes)),
             shape=(adata.n_vars, len(unique_names)),
         )
         collapsed_X = adata.X @ projection
     else:
         source_X = np.asarray(adata.X)
         collapsed_X = np.zeros((adata.n_obs, len(unique_names)), dtype=source_X.dtype)
-        for source_position, target_position in enumerate(group_codes):
-            collapsed_X[:, target_position] += source_X[:, source_position]
+        for i, j in enumerate(group_codes):
+            collapsed_X[:, j] += source_X[:, i]
 
     collapsed_var = adata.var.iloc[first_positions].copy()
     collapsed_var.index = unique_names
@@ -95,43 +46,31 @@ def collapse_duplicate_genes(adata):
 
 
 def cell_qc_mask(adata, min_genes, max_genes, max_mito_pct, mito_prefix):
-    if sp.issparse(adata.X):
-        detected_genes = np.asarray((adata.X > 0).sum(axis=1)).ravel()
-        total_counts = np.asarray(adata.X.sum(axis=1)).ravel()
-    else:
-        matrix = np.asarray(adata.X)
-        detected_genes = np.sum(matrix > 0, axis=1)
-        total_counts = np.sum(matrix, axis=1)
+    n_genes = np.asarray((adata.X > 0).sum(axis=1)).ravel()
+    total_counts = np.asarray(adata.X.sum(axis=1)).ravel()
 
-    gene_names = pd.Index(adata.var_names.astype(str)).str.upper()
-    mitochondrial = np.asarray(gene_names.str.startswith(mito_prefix.upper()), dtype=bool)
-
-    if mitochondrial.any():
-        if sp.issparse(adata.X):
-            mitochondrial_counts = np.asarray(adata.X[:, mitochondrial].sum(axis=1)).ravel()
-        else:
-            mitochondrial_counts = np.sum(np.asarray(adata.X)[:, mitochondrial], axis=1)
-    else:
-        mitochondrial_counts = np.zeros(adata.n_obs, dtype=float)
+    # Mitochondrial counts
+    gene_names = adata.var_names.str.upper()
+    mt = gene_names.str.startswith(mito_prefix.upper())
+    mt_counts = np.asarray(adata.X[:, mt].sum(axis=1)).ravel()
+    if not mt.any():
         print(f"Warning: no genes begin with mitochondrial prefix {mito_prefix!r}.")
 
-    mitochondrial_pct = np.divide(
-        100.0 * mitochondrial_counts,
+    pct_mt = np.divide(
+        100.0 * mt_counts,
         total_counts,
         out=np.zeros(adata.n_obs, dtype=float),
         where=total_counts != 0,
     )
 
-    keep = detected_genes >= min_genes
+    keep = n_genes >= min_genes
     if max_genes is not None:
-        keep &= detected_genes <= max_genes
-    keep &= mitochondrial_pct < max_mito_pct
+        keep &= n_genes <= max_genes
+    keep &= pct_mt < max_mito_pct
     return keep
 
 
 def run_scrublet_by_batch(adata, batch_key, min_batch_cells, random_state):
-    if batch_key not in adata.obs.columns:
-        raise KeyError(f"Batch column {batch_key!r} was not found in adata.obs.")
     if adata.obs[batch_key].isna().any():
         raise ValueError(f"Batch column {batch_key!r} contains missing values.")
 
@@ -156,7 +95,7 @@ def run_scrublet_by_batch(adata, batch_key, min_batch_cells, random_state):
 
     batches = pd.Index(pd.unique(batch_values))
     for batch_number, batch_name in enumerate(batches, start=1):
-        batch_mask = batch_values.eq(batch_name).to_numpy()
+        batch_mask = (batch_values == batch_name).to_numpy()
         batch = adata[batch_mask].copy()
         print(
             f"Scrublet {batch_number}/{len(batches)} | {batch_name} | "
@@ -180,28 +119,26 @@ def run_scrublet_by_batch(adata, batch_key, min_batch_cells, random_state):
     return adata
 
 
-def write_h5ad(adata, output_path, overwrite):
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
-    if temporary_path.exists():
-        temporary_path.unlink()
-    adata.write_h5ad(temporary_path)
-    temporary_path.replace(output_path)
-
-
 def main():
-    args = parse_args()
-    if not args.input_h5ad.exists():
-        raise FileNotFoundError(args.input_h5ad)
-    if args.min_genes < 0:
-        raise ValueError("--min-genes must be nonnegative.")
-    if args.max_genes is not None and args.max_genes < args.min_genes:
-        raise ValueError("--max-genes must be greater than or equal to --min-genes.")
-    if args.min_batch_cells < 1:
-        raise ValueError("--min-batch-cells must be positive.")
+    parser = argparse.ArgumentParser(
+        description="Preprocess one h5ad using cell QC followed by batch-wise Scrublet."
+    )
+    parser.add_argument("input_h5ad", type=Path)
+    parser.add_argument("output_h5ad", type=Path)
+    parser.add_argument(
+        "--count-source",
+        default="X",
+        help="Count matrix to use: X, raw, or the name of an AnnData layer (default: X).",
+    )
+    parser.add_argument("--batch-key", default="sample_id")
+    parser.add_argument("--min-genes", type=int, default=200)
+    parser.add_argument("--max-genes", type=int, default=None)
+    parser.add_argument("--max-mito-pct", type=float, default=10.0)
+    parser.add_argument("--mito-prefix", default="MT-")
+    parser.add_argument("--min-batch-cells", type=int, default=50)
+    parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
 
     adata = ad.read_h5ad(args.input_h5ad)
     print(f"Loaded {args.input_h5ad}: {adata.n_obs:,} cells x {adata.n_vars:,} genes")
@@ -209,37 +146,37 @@ def main():
     if not adata.obs_names.is_unique:
         adata.obs_names_make_unique()
         print("Made duplicated observation names unique.")
-    adata = select_count_source(adata, args.count_source)
-    if not adata.obs_names.is_unique:
-        raise RuntimeError("Observation names are not unique after count-source selection.")
+
+    # Read counts from X, raw, or a named layer
+    if args.count_source == 'raw':
+        counts = adata.raw.to_adata()
+        counts.obs = adata.obs.copy()
+        adata = counts
+    elif args.count_source != 'X':
+        adata.X = adata.layers[args.count_source].copy()
 
     adata.var_names = pd.Index(adata.var_names.astype(str).str.strip())
     if (adata.var_names == "").any():
         raise ValueError("One or more genes have empty names.")
     adata = collapse_duplicate_genes(adata)
-    if not adata.var_names.is_unique:
-        raise RuntimeError("Gene names are not unique after duplicate-gene collapse.")
     adata.obs["timepoint"] = "infusion"
 
+    # Filter cells by detected genes and mitochondrial fraction
     n_before_qc = adata.n_obs
     keep = cell_qc_mask(
-        adata,
-        min_genes=args.min_genes,
-        max_genes=args.max_genes,
-        max_mito_pct=args.max_mito_pct,
-        mito_prefix=args.mito_prefix,
+        adata, min_genes=args.min_genes, max_genes=args.max_genes,
+        max_mito_pct=args.max_mito_pct, mito_prefix=args.mito_prefix,
     )
     adata = adata[keep].copy()
     print(f"Cell QC: {n_before_qc:,} -> {adata.n_obs:,} cells")
     if adata.n_obs == 0:
         raise ValueError("No cells remain after cell QC.")
 
+    # Run Scrublet separately for each sample
     n_before_scrublet = adata.n_obs
     adata = run_scrublet_by_batch(
-        adata,
-        batch_key=args.batch_key,
-        min_batch_cells=args.min_batch_cells,
-        random_state=args.random_state,
+        adata, batch_key=args.batch_key,
+        min_batch_cells=args.min_batch_cells, random_state=args.random_state,
     )
     print(f"Batch filtering and Scrublet: {n_before_scrublet:,} -> {adata.n_obs:,} cells")
     if adata.n_obs == 0:

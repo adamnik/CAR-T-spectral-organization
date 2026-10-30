@@ -1,30 +1,20 @@
-"""Fit uncertainty-marginalized continuous O-lambda survival effects."""
+# Continuous O-lambda survival model
 
 import argparse
+import json
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
-from survival_model import (
-    atomic_csv,
-    atomic_json,
-    diagnostics,
-    hierarchical_parameters,
-    interval_loglikelihood,
-    load_olambda_analysis,
-    marginalize_particles,
-    model_coordinates,
-    sample_model,
-    summarize_effects,
-    survival_arrays,
-)
+from survival_model import load_olambda_analysis, survival_arrays, model_coordinates
+from survival_model import hierarchical_parameters, interval_loglikelihood, marginalize_particles
+from survival_model import summarize_effects, diagnostics
 
 
-def parse_args():
+def main():
     parser = argparse.ArgumentParser(
         description="Fit a continuous hierarchical survival model for inferred O-lambda."
     )
@@ -39,22 +29,13 @@ def parse_args():
     parser.add_argument("--cores", type=int, default=4)
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    if args.minimum_cells < 1:
-        raise ValueError("--minimum-cells must be positive.")
-    if args.n_particles < 2:
-        raise ValueError("--n-particles must be at least two.")
+    args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Read patient estimates and clinical outcomes
     data, _, particles, particle_weights, scaling = load_olambda_analysis(
-        args.asymptotes_csv,
-        args.outcomes_csv,
-        minimum_cells=args.minimum_cells,
-        n_particles=args.n_particles,
+        args.asymptotes_csv, args.outcomes_csv,
+        minimum_cells=args.minimum_cells, n_particles=args.n_particles,
     )
     arrays = survival_arrays(data)
     print(
@@ -64,40 +45,33 @@ def main():
         flush=True,
     )
 
+    # Survival model
     with pm.Model(coords=model_coordinates(data, arrays)):
         baseline_log_rate, patient_effect = hierarchical_parameters(arrays)
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
-            + patient_effect[:, None, None]
-            * pt.as_tensor_variable(particles)[:, :, None]
+            + patient_effect[:, None, None] * pt.as_tensor_variable(particles)[:, :, None]
         )
         conditional_loglikelihood = interval_loglikelihood(hazard, arrays)
-        patient_loglikelihood = marginalize_particles(
-            conditional_loglikelihood,
-            particle_weights,
-        )
-        pm.Deterministic(
-            "patient_loglikelihood",
-            patient_loglikelihood,
-            dims="observation",
-        )
+        patient_loglikelihood = marginalize_particles(conditional_loglikelihood, particle_weights)
+        pm.Deterministic('patient_loglikelihood', patient_loglikelihood, dims='observation')
         pm.Potential("survival_loglikelihood", pt.sum(patient_loglikelihood))
 
         started = time.time()
-        idata = sample_model(
-            args.draws,
-            args.tune,
-            args.chains,
-            args.cores,
-            args.target_accept,
-            args.random_state,
+        idata = pm.sample(
+            draws=args.draws, tune=args.tune,
+            chains=args.chains, cores=args.cores,
+            target_accept=args.target_accept,
+            init="adapt_diag",
+            random_seed=args.random_state,
+            progressbar=True,
+            return_inferencedata=True,
         )
         elapsed = time.time() - started
 
+    # Posterior summaries
     variables = [
-        "global_effect",
-        "dataset_effect_sd",
-        "dataset_effect",
+        "global_effect", "dataset_effect_sd", "dataset_effect",
         "baseline_log_rate_initial",
         "baseline_smoothness",
         "baseline_innovation",
@@ -117,29 +91,28 @@ def main():
         }
     )
 
-    atomic_csv(data, args.output_dir / "analysis_cohort.csv")
-    atomic_csv(pd.DataFrame([result]), args.output_dir / "model_result.csv")
-    atomic_csv(dataset_results, args.output_dir / "dataset_effects.csv")
+    # Save results
+    data.to_csv(args.output_dir / 'analysis_cohort.csv', index=False)
+    pd.DataFrame([result]).to_csv(args.output_dir / 'model_result.csv', index=False)
+    dataset_results.to_csv(args.output_dir / 'dataset_effects.csv', index=False)
     posterior_summary.to_csv(args.output_dir / "posterior_summary.csv")
     idata.to_netcdf(args.output_dir / "posterior.nc")
-    atomic_json(
-        {
-            "model": "continuous uncertainty-marginalized O_lambda survival",
-            "minimum_cells": args.minimum_cells,
-            "n_particles": args.n_particles,
-            "particle_definition": (
-                "equal-probability midpoint particles from each patient's "
-                "Student-t4 posterior in log(O_lambda_inf - 1)"
-            ),
-            "particle_scaling": scaling,
-            "draws": args.draws,
-            "tune": args.tune,
-            "chains": args.chains,
-            "target_accept": args.target_accept,
-            "random_state": args.random_state,
-        },
-        args.output_dir / "run_manifest.json",
-    )
+    manifest = {
+        'model': 'continuous uncertainty-marginalized O_lambda survival',
+        'minimum_cells': args.minimum_cells,
+        'n_particles': args.n_particles,
+        'particle_definition': (
+            "equal-probability midpoint particles from each patient's "
+            "Student-t4 posterior in log(O_lambda_inf - 1)"
+        ),
+        'particle_scaling': scaling,
+        'draws': args.draws,
+        'tune': args.tune,
+        'chains': args.chains,
+        'target_accept': args.target_accept,
+        'random_state': args.random_state,
+    }
+    (args.output_dir / 'run_manifest.json').write_text(json.dumps(manifest, indent=2))
     print(pd.DataFrame([result]).to_string(index=False), flush=True)
 
 

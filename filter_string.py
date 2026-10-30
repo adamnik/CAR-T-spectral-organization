@@ -1,4 +1,4 @@
-"""Restrict one AnnData file to canonical human STRING genes."""
+# Map gene names to the human STRING reference
 
 import argparse
 import re
@@ -12,26 +12,14 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from analysis_io import write_h5ad
+
 
 CURATED_ALIAS_SUM_GROUPS = {
     "SEPTIN4": {"SEPT4", "C17ORF47"},
     "RAMAC": {"FAM103A1", "RAMMET"},
     "MTLN": {"LINC00116", "SMIM37"},
 }
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Map one h5ad to unique canonical human STRING genes."
-    )
-    parser.add_argument("input_h5ad", type=Path)
-    parser.add_argument("output_h5ad", type=Path)
-    parser.add_argument("--string-version", default="12.0")
-    parser.add_argument("--taxon-id", default="9606")
-    parser.add_argument("--string-dir", type=Path, default=Path("STRING"))
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
 
 
 def clean_text(value):
@@ -65,10 +53,7 @@ def download_string_file(url, destination, refresh):
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = destination.with_suffix(destination.suffix + ".part")
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "CAR-T-spectral-organization/1.0"},
-    )
+    request = urllib.request.Request(url, headers={'User-Agent': 'CAR-T-spectral-organization/1.0'})
     print(f"Downloading {url}")
     with urllib.request.urlopen(request, timeout=300) as response:
         with temporary_path.open("wb") as output:
@@ -92,17 +77,9 @@ def string_paths(string_dir, version, taxon_id, refresh):
 
 def load_string_reference(info_path, aliases_path, input_gene_names, taxon_id):
     protein_info = pd.read_csv(
-        info_path,
-        sep="\t",
-        compression="gzip",
-        dtype=str,
-        keep_default_na=False,
-    ).rename(columns={"#string_protein_id": "string_protein_id"})
-
-    required = {"string_protein_id", "preferred_name"}
-    missing = required.difference(protein_info.columns)
-    if missing:
-        raise ValueError(f"STRING protein.info is missing columns: {sorted(missing)}")
+        info_path, sep='\t', compression='gzip', dtype=str, keep_default_na=False
+    )
+    protein_info = protein_info.rename(columns={'#string_protein_id': 'string_protein_id'})
 
     protein_info["protein_id"] = protein_info["string_protein_id"].map(normalize)
     protein_info["preferred_original"] = protein_info["preferred_name"].map(clean_text)
@@ -126,6 +103,7 @@ def load_string_reference(info_path, aliases_path, input_gene_names, taxon_id):
     protein_to_preferred = protein_info.set_index("protein_id")["preferred"].to_dict()
     preferred_set = set(preferred_names)
 
+    # Look up aliases only for genes without a preferred-name match
     input_tokens = {normalize(gene) for gene in input_gene_names}
     aliases_needed = input_tokens.difference(preferred_set)
     alias_candidates = defaultdict(set)
@@ -141,9 +119,7 @@ def load_string_reference(info_path, aliases_path, input_gene_names, taxon_id):
     print("Reading STRING aliases needed by this dataset...")
     for chunk in aliases_reader:
         chunk = chunk.rename(columns={"#string_protein_id": "string_protein_id"})
-        for protein_id, alias in chunk[["string_protein_id", "alias"]].itertuples(
-            index=False, name=None
-        ):
+        for protein_id, alias in chunk[['string_protein_id', 'alias']].itertuples(index=False, name=None):
             alias_token = normalize(alias)
             if alias_token not in aliases_needed or not plausible_alias(alias_token):
                 continue
@@ -177,12 +153,9 @@ def columns_are_equal(matrix, first, second):
         difference = matrix[:, first] - matrix[:, second]
         difference.eliminate_zeros()
         return difference.nnz == 0
-    return bool(
-        np.array_equal(
-            np.asarray(matrix[:, first]).ravel(),
-            np.asarray(matrix[:, second]).ravel(),
-        )
-    )
+    first_column = np.asarray(matrix[:, first]).ravel()
+    second_column = np.asarray(matrix[:, second]).ravel()
+    return bool(np.array_equal(first_column, second_column))
 
 
 def candidate_priority(candidate, canonical_gene):
@@ -242,11 +215,17 @@ def resolve_string_columns(matrix, gene_names, preferred_names, preferred_set, a
         nonzero = [candidate for candidate in candidates if candidate["has_expression"]]
         curated_aliases = CURATED_ALIAS_SUM_GROUPS.get(canonical_gene.upper())
 
+        # Sum distinct expression columns only for these curated alias groups
         if curated_aliases is not None:
             allowed = {normalize(label) for label in curated_aliases}
             allowed.add(normalize(canonical_gene))
-            curated_nonzero = [candidate for candidate in nonzero if normalize(candidate["label"]) in allowed]
-            other_nonzero = [candidate for candidate in nonzero if normalize(candidate["label"]) not in allowed]
+            curated_nonzero = []
+            other_nonzero = []
+            for candidate in nonzero:
+                if normalize(candidate['label']) in allowed:
+                    curated_nonzero.append(candidate)
+                else:
+                    other_nonzero.append(candidate)
 
             if curated_nonzero and other_nonzero:
                 conflicts.append((canonical_gene, nonzero))
@@ -267,6 +246,7 @@ def resolve_string_columns(matrix, gene_names, preferred_names, preferred_set, a
                     )
                 continue
 
+        # Prefer the canonical name over an alias
         identity = [
             candidate
             for candidate in candidates
@@ -292,10 +272,7 @@ def resolve_string_columns(matrix, gene_names, preferred_names, preferred_set, a
         if len(nonzero_eligible) == 1:
             keep = nonzero_eligible[0]
         elif len(nonzero_eligible) == 0:
-            keep = min(
-                eligible,
-                key=lambda candidate: candidate_priority(candidate, canonical_gene),
-            )
+            keep = min(eligible, key=lambda candidate: candidate_priority(candidate, canonical_gene))
         elif identical_columns(matrix, nonzero_eligible):
             keep = min(
                 nonzero_eligible,
@@ -332,10 +309,7 @@ def build_filtered_matrix(matrix, selected):
             target_indices.extend([target] * len(indices))
 
         projection = sp.csr_matrix(
-            (
-                np.ones(len(source_indices), dtype=matrix.dtype),
-                (source_indices, target_indices),
-            ),
+            (np.ones(len(source_indices), dtype=matrix.dtype), (source_indices, target_indices)),
             shape=(matrix.shape[1], len(selected)),
         )
         filtered = (matrix @ projection).tocsr()
@@ -351,30 +325,22 @@ def build_filtered_matrix(matrix, selected):
     return filtered
 
 
-def write_h5ad(adata, output_path, overwrite):
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
-    if temporary_path.exists():
-        temporary_path.unlink()
-    adata.write_h5ad(temporary_path)
-    temporary_path.replace(output_path)
-
-
 def main():
-    args = parse_args()
-    if not args.input_h5ad.exists():
-        raise FileNotFoundError(args.input_h5ad)
+    parser = argparse.ArgumentParser(description='Map one h5ad to unique canonical human STRING genes.')
+    parser.add_argument("input_h5ad", type=Path)
+    parser.add_argument("output_h5ad", type=Path)
+    parser.add_argument("--string-version", default="12.0")
+    parser.add_argument("--taxon-id", default="9606")
+    parser.add_argument("--string-dir", type=Path, default=Path("STRING"))
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
 
     adata = ad.read_h5ad(args.input_h5ad)
     print(f"Loaded {args.input_h5ad}: {adata.n_obs:,} cells x {adata.n_vars:,} genes")
     if not adata.obs_names.is_unique:
         adata.obs_names_make_unique()
         print("Made duplicated observation names unique.")
-    if not adata.obs_names.is_unique:
-        raise RuntimeError("Observation names are not unique after repair.")
     if not adata.var_names.is_unique:
         raise ValueError(
             "Input gene names are duplicated. Exact duplicates must be collapsed by "
@@ -382,10 +348,7 @@ def main():
         )
 
     info_path, aliases_path = string_paths(
-        args.string_dir,
-        args.string_version,
-        args.taxon_id,
-        args.refresh,
+        args.string_dir, args.string_version, args.taxon_id, args.refresh
     )
     preferred_names, preferred_set, aliases = load_string_reference(
         info_path,
@@ -394,11 +357,7 @@ def main():
         args.taxon_id,
     )
     selected = resolve_string_columns(
-        adata.X,
-        adata.var_names.astype(str),
-        preferred_names,
-        preferred_set,
-        aliases,
+        adata.X, adata.var_names.astype(str), preferred_names, preferred_set, aliases
     )
     if not selected:
         raise ValueError("No genes could be mapped to STRING.")
@@ -410,10 +369,7 @@ def main():
         obs=adata.obs.copy(),
         var=pd.DataFrame(index=pd.Index(canonical_names, name="gene_symbol")),
     )
-    filtered.uns["STRING"] = {
-        "version": args.string_version,
-        "taxon_id": args.taxon_id,
-    }
+    filtered.uns["STRING"] = {'version': args.string_version, 'taxon_id': args.taxon_id}
 
     write_h5ad(filtered, args.output_h5ad, args.overwrite)
     print(f"Saved {args.output_h5ad}: {filtered.n_obs:,} cells x {filtered.n_vars:,} genes")

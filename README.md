@@ -1,6 +1,18 @@
 # CAR T-cell spectral organization
 
-This repository contains the preprocessing and statistical analysis code for the CAR T-cell spectral organization framework.
+Code for preprocessing CAR T-cell expression data, extracting patient-level TCAT features, and relating spectral organization to survival.
+
+## Setup
+
+Use Python 3.11 and install the dependencies in a dedicated environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+The asymptote model requires R and `nlme` (`install.packages("nlme")`). The environment used for the synthetic checks is recorded in `requirements-checked.txt`.
 
 ## Patient-level TCAT extraction
 
@@ -66,3 +78,15 @@ python fit_olambda_survival_regimes.py \
 Both survival scripts use 16 posterior particles by default. This was the lowest evaluated resolution that reproduced the continuous hazard ratio, regime hazard ratio, and crossover estimate obtained with 21 and 64 particles.
 
 Clinical outcomes must contain `Dataset`, `sample_id`, `event_observed` (or `event`), `t_start`, and `t_end`. Times are measured in months. An event with equal `t_start` and `t_end` is treated as exactly observed; an event with unequal bounds is interval censored; and a row with `event_observed = 0` is right censored at `t_end`.
+
+
+## Scientific checks and reproducibility
+
+```bash
+python -m unittest -v test_analysis
+Rscript test_asymptotes.R
+```
+
+These small synthetic checks cover count aggregation, QC, STRING alias resolution, TCAT cell alignment, patient bootstrap particles, and exact/interval/right-censored likelihoods. The R check covers the empirical-Bayes patient update. They do not require clinical data or rerun the full study.
+
+The scripts assume the documented input columns and valid analysis parameters. Gene ambiguity, patient alignment, and mathematical-domain checks are retained. Results are written directly to the output files; h5ad replacement still requires `--overwrite`.
