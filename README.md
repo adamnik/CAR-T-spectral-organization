@@ -73,6 +73,31 @@ python extract_olambda_trajectories.py \
 
 Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. The primary output, `olambda_trajectory_points.csv`, can be concatenated across datasets and passed directly to the asymptote model below. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
 
+## O-lambda sampling sensitivities
+
+`extract_olambda_sensitivity.py` generates fixed-depth products for three outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`.
+
+```bash
+python extract_olambda_sensitivity.py \
+  dataset_manifest.csv \
+  results/patient_bootstrap \
+  --experiment patient-bootstrap
+
+python extract_olambda_sensitivity.py \
+  dataset_manifest.csv \
+  results/cell_type_standardized \
+  --experiment cell-type-standardized
+
+python extract_olambda_sensitivity.py \
+  dataset_manifest.csv \
+  results/pooled_synthetic \
+  --experiment pooled-synthetic
+```
+
+Each analysis draws 25 products of 10,000 cells by default. The patient bootstrap draws Dirichlet cell weights and then samples a posterior-predictive product. The cell-type-standardized analysis gives every patient the same cohort-average cell-type distribution; retained cell types must contribute at least 10 cells to every patient and at least 1% of the average product. The pooled analysis reproduces each target patient's native cell-type distribution from a leave-one-patient-out, within-dataset pool. Source donors are balanced within each cell type, and sampling with replacement is used when a requested quota exceeds the available cells.
+
+The target patient's full-depth two-state gene set is fixed across all replicates. The script then uses the same raw binary plug-in MI graph and exact-center O-lambda calculation as the finite-depth trajectory analysis. Patient-replicate checkpoints make every mode resumable; increasing `--replicates` adds new draws without replacing completed results. Composition, effective-sample-size, duplicate-cell, and pooled-donor audits are saved beside the O-lambda estimates.
+
 ## Patient-level O-lambda inference
 
 `fit_olambda_asymptotes.R` fits the latent-timescale spectral-tail model

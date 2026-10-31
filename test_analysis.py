@@ -20,6 +20,7 @@ from scipy.special import logsumexp
 from scipy.stats import t
 
 import extract_tcat_patient_particles as extraction
+import extract_olambda_sensitivity as sensitivity
 import filter_string as string
 import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
@@ -87,6 +88,60 @@ class AnalysisChecks(unittest.TestCase):
         logged = np.log(counts / counts.sum(axis=1, keepdims=True))
         assert_allclose(particles[:, 6:], logged - logged.mean(axis=1, keepdims=True))
         assert_allclose(center[:4].sum(), 0, atol=1e-14)
+
+    def test_sensitivity_cell_sampling(self):
+        target = pd.Series({'CD4': .3333, 'CD8': .6667})
+        quotas = sensitivity.integer_quotas(target, 10000)
+        self.assertEqual(quotas.sum(), 10000)
+        self.assertEqual(quotas.CD4, 3333)
+        self.assertEqual(quotas.CD8, 6667)
+
+        rows = np.arange(12)
+        labels = np.asarray(['CD4'] * 6 + ['CD8'] * 6)
+        selected, weights, donors = sensitivity.cell_type_standardized(
+            rows, labels, target, 1000, np.random.default_rng(4)
+        )
+        realized = pd.Series(labels[selected]).value_counts()
+        self.assertEqual(len(selected), 1000)
+        self.assertEqual(realized.CD4, 333)
+        self.assertEqual(realized.CD8, 667)
+        self.assertGreater(weights['cell_weight_ess'], 0)
+        self.assertEqual(donors, {})
+
+    def test_sensitivity_common_target_and_pooled_draw(self):
+        patients = pd.DataFrame({
+            'Dataset': ['A', 'A', 'A'],
+            'sample_id': ['p1', 'p2', 'p3'],
+        })
+        native = pd.DataFrame([
+            {'Dataset': 'A', 'sample_id': patient, 'cell_type': cell_type,
+             'native_cells': count, 'native_proportion': count / 100}
+            for patient, counts in {
+                'p1': {'CD4': 60, 'CD8': 39, 'rare': 1},
+                'p2': {'CD4': 50, 'CD8': 45, 'rare': 5},
+                'p3': {'CD4': 40, 'CD8': 50, 'rare': 10},
+            }.items()
+            for cell_type, count in counts.items()
+        ])
+        target = sensitivity.common_cell_type_target(patients, native, 10, .01)
+        self.assertEqual(list(target.index), ['CD4', 'CD8'])
+        assert_allclose(target.sum(), 1)
+
+        rows_by_patient = {
+            'p1': np.arange(0, 6),
+            'p2': np.arange(6, 12),
+            'p3': np.arange(12, 18),
+        }
+        labels = np.asarray((['CD4'] * 3 + ['CD8'] * 3) * 3)
+        selected, weights, donor_counts = sensitivity.pooled_synthetic(
+            rows_by_patient, labels, 'p1', {'CD4': .5, 'CD8': .5}, 1000,
+            np.random.default_rng(7),
+        )
+        self.assertEqual(len(selected), 1000)
+        self.assertFalse(np.isin(selected, rows_by_patient['p1']).any())
+        self.assertEqual(set(donor_counts), {'p2', 'p3'})
+        self.assertLessEqual(abs(donor_counts['p2'] - donor_counts['p3']), 2)
+        self.assertGreater(weights['cell_weight_ess'], 0)
 
     def test_extraction_command(self):
         columns = sorted(extraction.ASA_COMPONENTS + extraction.PROLIFERATION_COMPONENTS)
