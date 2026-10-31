@@ -59,6 +59,32 @@ The individual models estimate a global effect and hierarchically pooled dataset
 
 The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; cell-label proportions are constrained separately within each label composition. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
 
+## TCAT correlation geometry
+
+`estimate_tcat_correlations.py` estimates dataset-adjusted correlations among TCAT features and between each TCAT feature and asymptotic O-lambda. Every draw independently samples one TCAT particle and one O-lambda particle per patient, draws Bayesian-bootstrap patient weights, removes weighted dataset means, and calculates the resulting correlations.
+
+```bash
+python estimate_tcat_correlations.py \
+  all_patient_TCAT_particles.npz \
+  patient_olambda_particles.csv \
+  results/tcat_correlations \
+  --draws 2000
+```
+
+The primary outputs are posterior summaries for all pairwise TCAT correlations and all O-lambda–TCAT correlations. Complete posterior draws can optionally be retained with `--save-draws`.
+
+`plot_tcat_correlation_matrices.py` creates separate GEP and cell-type figures. Each Bayesian correlation matrix is followed by perfectly aligned rows showing correlation with asymptotic O-lambda and the continuous survival effect on the symmetric log2 hazard-ratio scale.
+
+```bash
+python plot_tcat_correlation_matrices.py \
+  results/tcat_correlations/tcat_pairwise_correlations.csv \
+  results/tcat_correlations/olambda_tcat_correlations.csv \
+  results/tcat_individual/individual_results.csv \
+  results/tcat_correlation_figures
+```
+
+Black markers denote posterior directional probability of at least 0.95 for O-lambda correlations and a 95% credible interval excluding one for survival effects. The matrix order is determined by average-linkage clustering of the posterior-median correlations.
+
 ## Smooth TCAT survival regimes
 
 `fit_tcat_survival_regimes.py` applies the O-lambda smooth-regime model independently to every TCAT feature. It uses the same outcome-blind Q10-Q90 crossover prior, 0.10-SD logistic transition, uncertainty-particle marginalization, interval-censored likelihood, dataset-specific baseline hazards, and hierarchically pooled dataset effects.

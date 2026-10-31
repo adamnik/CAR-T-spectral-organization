@@ -21,6 +21,7 @@ from scipy.stats import t
 
 import extract_tcat_patient_particles as extraction
 import extract_olambda_sensitivity as sensitivity
+import estimate_tcat_correlations as correlations
 import filter_string as string
 import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
@@ -29,6 +30,26 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_uncertainty_aware_correlations(self):
+        values = np.array([
+            [0., 0., 3.],
+            [1., 2., 2.],
+            [2., 4., 1.],
+            [3., 6., 0.],
+        ])
+        weights = np.repeat(.25, 4)
+        matrix = correlations.weighted_correlation_matrix(values, weights)
+        assert_allclose(matrix, [[1., 1., -1.], [1., 1., -1.], [-1., -1., 1.]])
+        actual = correlations.weighted_vector_correlations(values, values[:, 0], weights)
+        assert_allclose(actual, [1., 1., -1.])
+
+        datasets = np.array(['A', 'A', 'B', 'B'])
+        residuals = correlations.dataset_residuals(values, weights, datasets)
+        for dataset in np.unique(datasets):
+            keep = datasets == dataset
+            group_weights = weights[keep] / weights[keep].sum()
+            assert_allclose(np.sum(residuals[keep] * group_weights[:, None], axis=0), 0.)
+
     def test_duplicate_genes_and_qc(self):
         counts = np.array([[2, 3, 0, 1], [0, 0, 4, 0], [0, 0, 0, 0]])
         for matrix in [counts, sparse.csr_matrix(counts)]:
