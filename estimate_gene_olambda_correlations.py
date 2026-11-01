@@ -150,7 +150,7 @@ def summarize_associations(genes, draws):
 
 
 def load_analysis(pseudobulk_path, olambda_path, patient_metadata_path, minimum_cells,
-                  treatment_column):
+                  treatment_column, drop_missing_treatment=False):
     pseudobulk = add_join_key(pd.read_csv(pseudobulk_path))
     olambda = add_join_key(pd.read_csv(olambda_path))
     patient_metadata = add_join_key(pd.read_csv(patient_metadata_path))
@@ -182,16 +182,29 @@ def load_analysis(pseudobulk_path, olambda_path, patient_metadata_path, minimum_
     )
     analysis = analysis.loc[analysis.n_cells >= minimum_cells].copy()
     analysis = analysis.sort_values(["Dataset", "_patient_join"]).reset_index(drop=True)
+    excluded_patients = pd.DataFrame(
+        columns=["Dataset", "sample_id", "n_cells", "reason"]
+    )
     if treatment_column is not None and analysis[treatment_column].isna().any():
-        raise ValueError("Treatment metadata are missing for one or more retained patients.")
+        missing_treatment = analysis[treatment_column].isna()
+        excluded_patients = analysis.loc[
+            missing_treatment, ["Dataset", "sample_id", "n_cells"]
+        ].copy()
+        excluded_patients["reason"] = "missing treatment annotation"
+        if not drop_missing_treatment:
+            raise ValueError(
+                "Treatment metadata are missing for one or more retained patients. "
+                "Use --drop-missing-treatment for a complete-case adjusted analysis."
+            )
+        analysis = analysis.loc[~missing_treatment].reset_index(drop=True)
 
     raw_expression = analysis[gene_columns].apply(pd.to_numeric, errors="raise").to_numpy(float)
     valid = np.isfinite(raw_expression).all(axis=0) & (raw_expression.var(axis=0) > 0)
-    excluded = np.asarray(gene_columns, dtype=object)[~valid]
+    excluded_genes = np.asarray(gene_columns, dtype=object)[~valid]
     genes = np.asarray(gene_columns, dtype=object)[valid]
     expression = rank_columns(raw_expression[:, valid])
     particles = analysis[particle_columns].to_numpy(float)
-    return analysis, genes, expression, particles, excluded
+    return analysis, genes, expression, particles, excluded_genes, excluded_patients
 
 
 def main():
@@ -210,6 +223,7 @@ def main():
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--treatment-column", default="Treatment")
     parser.add_argument("--dataset-only", action="store_true")
+    parser.add_argument("--drop-missing-treatment", action="store_true")
     parser.add_argument("--save-draws", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -220,6 +234,7 @@ def main():
         "ranking_rnk": args.output_dir / "olambda_gene_GSEA_rank.rnk",
         "cohort": args.output_dir / "analysis_cohort.csv",
         "treatment": args.output_dir / "treatment_contrast_audit.csv",
+        "excluded": args.output_dir / "excluded_patients.csv",
         "manifest": args.output_dir / "gene_association_manifest.json",
     }
     existing = [path for path in output_paths.values() if path.exists()]
@@ -228,12 +243,13 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     treatment_column = None if args.dataset_only else args.treatment_column
-    analysis, genes, expression, particles, excluded = load_analysis(
+    analysis, genes, expression, particles, excluded_genes, excluded_patients = load_analysis(
         args.pseudobulk_csv,
         args.olambda_particles_csv,
         args.patient_metadata_csv,
         args.minimum_cells,
         treatment_column,
+        args.drop_missing_treatment,
     )
     design, design_names, treatment_audit = nuisance_design(analysis, treatment_column)
     print(
@@ -268,6 +284,7 @@ def main():
         output_paths["cohort"], index=False
     )
     treatment_audit.to_csv(output_paths["treatment"], index=False)
+    excluded_patients.to_csv(output_paths["excluded"], index=False)
     if args.save_draws:
         np.savez_compressed(
             args.output_dir / "olambda_gene_correlation_draws.npz",
@@ -282,7 +299,10 @@ def main():
         "patients": len(analysis),
         "datasets": sorted(analysis.Dataset.astype(str).unique()),
         "common_string_genes_ranked": len(genes),
-        "constant_or_nonfinite_genes_excluded": excluded.astype(str).tolist(),
+        "constant_or_nonfinite_genes_excluded": excluded_genes.astype(str).tolist(),
+        "patients_excluded_for_missing_treatment": excluded_patients[
+            ["Dataset", "sample_id"]
+        ].to_dict(orient="records"),
         "draws": args.draws,
         "random_state": args.random_state,
         "olambda_uncertainty": "one equal-probability patient particle sampled per draw",

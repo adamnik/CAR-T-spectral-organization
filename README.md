@@ -156,6 +156,8 @@ python estimate_gene_olambda_correlations.py \
 
 The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
 
+Patients lacking a treatment annotation are not assigned a treatment by inference. The default is to stop; `--drop-missing-treatment` performs a complete-case adjusted analysis and records every omitted patient in `excluded_patients.csv`.
+
 `run_fgsea_rankings.R` runs `fgseaMultilevel` against MSigDB Hallmark and Reactome collections and saves both enrichment results and the exact gene-set membership tables used.
 
 ```bash
