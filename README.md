@@ -249,6 +249,28 @@ Rscript fit_olambda_asymptotes.R \
 
 This script requires R and the `nlme` package. Its primary outputs are `patient_olambda_asymptotes.csv` and `patient_olambda_particles.csv`.
 
+## Technical robustness of inferred O-lambda
+
+`extract_olambda_technical_covariates.py` extracts five prespecified technical covariates from the processed infusion datasets: log cell count, mean log total counts per cell, mean mitochondrial fraction, mean log detected genes per cell, and log node count in the corresponding full-cell graph. Cell-level quantities use coherent Bayesian-bootstrap particles; cell count and graph size are exact.
+
+```bash
+python extract_olambda_technical_covariates.py \
+  dataset_manifest.csv \
+  olambda_trajectory_points.csv \
+  results/olambda_technical_covariates
+```
+
+`fit_olambda_technical_regression.py` regresses latent asymptotic O-lambda on these measurements. Independent models use hierarchically pooled dataset slopes. The joint model uses weak shrinkage across all five coefficients, and the leave-one-dataset-out mode quantifies whether the technical measurements reconstruct O-lambda in unseen cohorts. Independent technical and O-lambda particles are integrated over their Cartesian product.
+
+```bash
+python fit_olambda_technical_regression.py \
+  results/olambda_technical_covariates/olambda_technical_estimates.csv \
+  results/olambda_technical_covariates/olambda_technical_particles.npz \
+  results/olambda_asymptotes/patient_olambda_particles.csv \
+  results/olambda_technical_regression \
+  --mode all
+```
+
 ## Continuous survival association
 
 `fit_olambda_survival_continuous.py` fits a continuous interval-censored survival model. Uncertainty in each patient asymptote is propagated using posterior particles. Dataset effects are hierarchically pooled, while baseline hazard trajectories remain dataset-specific and share one temporal smoothness parameter.
@@ -285,6 +307,6 @@ python -m unittest -v test_analysis
 Rscript test_asymptotes.R
 ```
 
-These small synthetic checks cover count aggregation, QC, STRING alias resolution, TCAT cell alignment, patient bootstrap particles, and exact/interval/right-censored likelihoods. The R check covers the empirical-Bayes patient update. They do not require clinical data or rerun the full study.
+These small synthetic checks cover count aggregation, QC, STRING alias resolution, TCAT cell alignment, patient and technical bootstrap particles, and exact/interval/right-censored likelihoods. The R check covers the empirical-Bayes patient update. They do not require clinical data or rerun the full study.
 
 The scripts assume the documented input columns and valid analysis parameters. Gene ambiguity, patient alignment, and mathematical-domain checks are retained. Results are written directly to the output files; h5ad replacement still requires `--overwrite`.

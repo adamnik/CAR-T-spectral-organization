@@ -24,7 +24,9 @@ import extract_olambda_sensitivity as sensitivity
 import extract_string_pseudobulk as pseudobulk
 import estimate_gene_olambda_correlations as gene_correlations
 import estimate_tcat_correlations as correlations
+import extract_olambda_technical_covariates as technical_covariates
 import filter_string as string
+import fit_olambda_technical_regression as technical_regression
 import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
 import predictive_field as field
@@ -33,6 +35,39 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_technical_covariates_and_particles(self):
+        counts = np.array([
+            [9., 1., 0.],
+            [2., 0., 3.],
+            [0., 0., 4.],
+        ])
+        mitochondrial = np.array([False, True, False])
+        for matrix in [counts, sparse.csr_matrix(counts)]:
+            metrics = technical_covariates.cell_metrics(matrix, mitochondrial)
+            assert_allclose(metrics[:, 0], np.log1p([10., 5., 4.]))
+            assert_allclose(metrics[:, 1], [0.1, 0., 0.])
+            assert_allclose(metrics[:, 2], np.log1p([2., 2., 1.]))
+
+        central, particles = technical_covariates.patient_values(
+            metrics, 3, 1000, 16, np.random.default_rng(0)
+        )
+        self.assertEqual(central.shape, (5,))
+        self.assertEqual(particles.shape, (16, 5))
+        assert_allclose(central[[0, 4]], np.log([3, 1000]))
+        assert_allclose(particles[:, 0], np.log(3))
+        assert_allclose(particles[:, 4], np.log(1000))
+
+        central_x = np.column_stack([np.arange(4), np.arange(4) * 2 + 1])
+        particle_x = np.repeat(central_x[:, None, :], 3, axis=1)
+        central_y = np.arange(4) + 2
+        particle_y = np.repeat(central_y[:, None], 3, axis=1)
+        standardized, scaling = technical_regression.standardize(
+            central_x, particle_x, central_y, particle_y
+        )
+        assert_allclose(standardized['central_x'].mean(axis=0), 0, atol=1e-14)
+        assert_allclose(standardized['central_y'].mean(), 0, atol=1e-14)
+        self.assertGreater(scaling['y_scale'], 0)
+
     def test_string_pseudobulk_and_gene_correlations(self):
         counts = np.array([
             [1., 5., 0.],
