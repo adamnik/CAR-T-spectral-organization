@@ -26,6 +26,7 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError(f"Feature {feature!r} has no patient-level variation.")
     standardized = (particles[:, :, feature_index] - center) / scale
+    # Crossover bounds come from feature values, without survival outcomes
     crossover_low = float(np.quantile(values, args.crossover_quantile_low))
     crossover_high = float(np.quantile(values, args.crossover_quantile_high))
     if crossover_high <= crossover_low:
@@ -67,29 +68,27 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
     membership = np.asarray(idata.posterior.patient_probability_high)
     membership = membership.reshape(-1, len(data))
     result.update(diagnostic_values)
-    result.update(
-        {
-            "feature": feature,
-            "feature_kind": feature_kind(feature),
-            "effect_unit": "high versus low feature regime plateaus",
-            "center": center,
-            "scale": scale,
-            "crossover_prior_low": crossover_low,
-            "crossover_prior_high": crossover_high,
-            "crossover_median": crossover_median,
-            "crossover_q025": crossover_q025,
-            "crossover_q975": crossover_q975,
-            "crossover_percentile": float(np.mean(values <= crossover_median)),
-            "crossover_q025_percentile": float(np.mean(values <= crossover_q025)),
-            "crossover_q975_percentile": float(np.mean(values <= crossover_q975)),
-            "transition_scale_sd": args.transition_scale_sd,
-            "patients": len(data),
-            "events": int(data.event_observed.sum()),
-            "datasets": len(arrays["datasets"]),
-            "particles": particles.shape[1],
-            "wall_time_seconds": elapsed,
-        }
-    )
+    result.update({
+        "feature": feature,
+        "feature_kind": feature_kind(feature),
+        "effect_unit": "high versus low feature regime plateaus",
+        "center": center,
+        "scale": scale,
+        "crossover_prior_low": crossover_low,
+        "crossover_prior_high": crossover_high,
+        "crossover_median": crossover_median,
+        "crossover_q025": crossover_q025,
+        "crossover_q975": crossover_q975,
+        "crossover_percentile": float(np.mean(values <= crossover_median)),
+        "crossover_q025_percentile": float(np.mean(values <= crossover_q025)),
+        "crossover_q975_percentile": float(np.mean(values <= crossover_q975)),
+        "transition_scale_sd": args.transition_scale_sd,
+        "patients": len(data),
+        "events": int(data.event_observed.sum()),
+        "datasets": len(arrays["datasets"]),
+        "particles": particles.shape[1],
+        "wall_time_seconds": elapsed,
+    })
     dataset_results.insert(0, "feature", feature)
 
     membership_results = data[["Dataset", "sample_id"]].copy()
@@ -194,14 +193,12 @@ def main():
                     arrays, args, feature_dir,
                 )
             except Exception as error:
-                errors.append(
-                    {
-                        "feature": feature,
-                        "error_type": type(error).__name__,
-                        "error": str(error),
-                        "traceback": traceback.format_exc(),
-                    }
-                )
+                errors.append({
+                    "feature": feature,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                })
                 pd.DataFrame(errors).to_csv(args.output_dir / "regime_errors.csv", index=False)
                 print(f"ERROR {type(error).__name__}: {error}", flush=True)
                 continue

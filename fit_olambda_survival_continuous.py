@@ -81,17 +81,15 @@ def main():
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     result, dataset_results = summarize_effects(idata, arrays["datasets"])
     result.update(diagnostic_values)
-    result.update(
-        {
-            "effect_unit": "per global SD of inferred O_lambda_inf central estimates",
-            "n_particles": args.n_particles,
-            "minimum_cells": args.minimum_cells,
-            "patients": len(data),
-            "events": int(data.event_observed.sum()),
-            "datasets": len(arrays["datasets"]),
-            "wall_time_seconds": elapsed,
-        }
-    )
+    result.update({
+        "effect_unit": "per global SD of inferred O_lambda_inf central estimates",
+        "n_particles": args.n_particles,
+        "minimum_cells": args.minimum_cells,
+        "patients": len(data),
+        "events": int(data.event_observed.sum()),
+        "datasets": len(arrays["datasets"]),
+        "wall_time_seconds": elapsed,
+    })
 
     # Save results
     data.to_csv(args.output_dir / 'analysis_cohort.csv', index=False)

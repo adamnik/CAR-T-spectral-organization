@@ -104,20 +104,18 @@ def main():
     crossover_draws = np.asarray(idata.posterior.crossover_O_lambda).reshape(-1)
     membership = np.asarray(idata.posterior.patient_probability_high).reshape(-1, len(data))
     result.update(diagnostic_values)
-    result.update(
-        {
-            "effect_unit": "high versus low O_lambda regime plateaus",
-            "crossover_median": float(np.median(crossover_draws)),
-            "crossover_q025": float(np.quantile(crossover_draws, 0.025)),
-            "crossover_q975": float(np.quantile(crossover_draws, 0.975)),
-            "n_particles": args.n_particles,
-            "minimum_cells": args.minimum_cells,
-            "patients": len(data),
-            "events": int(data.event_observed.sum()),
-            "datasets": len(arrays["datasets"]),
-            "wall_time_seconds": elapsed,
-        }
-    )
+    result.update({
+        "effect_unit": "high versus low O_lambda regime plateaus",
+        "crossover_median": float(np.median(crossover_draws)),
+        "crossover_q025": float(np.quantile(crossover_draws, 0.025)),
+        "crossover_q975": float(np.quantile(crossover_draws, 0.975)),
+        "n_particles": args.n_particles,
+        "minimum_cells": args.minimum_cells,
+        "patients": len(data),
+        "events": int(data.event_observed.sum()),
+        "datasets": len(arrays["datasets"]),
+        "wall_time_seconds": elapsed,
+    })
 
     membership_results = data[['Dataset', 'sample_id', 'O_lambda_inf_central']].copy()
     membership_results["posterior_mean_probability_high"] = membership.mean(axis=0)

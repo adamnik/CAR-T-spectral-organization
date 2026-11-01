@@ -7,13 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
-def feature_kind(feature):
-    if feature.startswith("TCAT_GEP_"):
-        return "GEP"
-    if "_proportion_" in feature:
-        return "cell_type"
-    return "score"
+from analysis_io import feature_kind
+from predictive_field import dataset_residuals
 
 
 def load_particles(tcat_path, olambda_path):
@@ -37,12 +32,7 @@ def load_particles(tcat_path, olambda_path):
         raise ValueError("O-lambda particle identities are not unique.")
     olambda = olambda[["Dataset", "sample_id", *olambda_columns]]
 
-    data = patients.merge(
-        olambda,
-        on=["Dataset", "sample_id"],
-        how="inner",
-        validate="one_to_one",
-    )
+    data = patients.merge(olambda, on=['Dataset', 'sample_id'], how='inner', validate='one_to_one')
     if data.empty:
         raise ValueError("No patients were shared by the TCAT and O-lambda particle files.")
     indices = data.tcat_index.to_numpy(int)
@@ -55,16 +45,6 @@ def load_particles(tcat_path, olambda_path):
         weights,
         data[olambda_columns].to_numpy(float),
     )
-
-
-def dataset_residuals(values, weights, datasets):
-    residuals = np.asarray(values, dtype=float).copy()
-    for dataset in np.unique(datasets):
-        keep = datasets == dataset
-        group_weights = weights[keep]
-        group_weights = group_weights / group_weights.sum()
-        residuals[keep] -= np.sum(values[keep] * group_weights[:, None], axis=0)
-    return residuals
 
 
 def weighted_correlation_matrix(values, weights):
@@ -83,7 +63,8 @@ def weighted_vector_correlations(values, target, weights):
     covariance = np.sum(weights[:, None] * values * target[:, None], axis=0)
     value_variance = np.sum(weights[:, None] * values**2, axis=0)
     target_variance = np.sum(weights * target**2)
-    return covariance / np.sqrt(np.maximum(value_variance * target_variance, 1e-14))
+    denominator = np.sqrt(np.maximum(value_variance * target_variance, 1e-14))
+    return covariance / denominator
 
 
 def correlation_draws(data, tcat_values, tcat_weights, olambda_values,
@@ -96,17 +77,19 @@ def correlation_draws(data, tcat_values, tcat_weights, olambda_values,
     progress_step = max(1, n_draws // 10)
 
     for draw in range(n_draws):
-        tcat_index = np.asarray([
-            rng.choice(n_particles, p=tcat_weights[patient])
-            for patient in range(n_patients)
-        ])
+        # Keep all TCAT features from the same patient particle
+        tcat_index = []
+        for patient in range(n_patients):
+            tcat_index.append(rng.choice(n_particles, p=tcat_weights[patient]))
+        tcat_index = np.asarray(tcat_index)
         olambda_index = rng.integers(0, olambda_values.shape[1], size=n_patients)
         patient_weights = rng.dirichlet(np.ones(n_patients))
         tcat = tcat_values[np.arange(n_patients), tcat_index]
         spectral = olambda_values[np.arange(n_patients), olambda_index]
 
         tcat = dataset_residuals(tcat, patient_weights, datasets)
-        spectral = dataset_residuals(spectral[:, None], patient_weights, datasets)[:, 0]
+        spectral = dataset_residuals(spectral[:, None], patient_weights, datasets)
+        spectral = spectral[:, 0]
         pairwise[draw] = weighted_correlation_matrix(tcat, patient_weights)
         olambda[draw] = weighted_vector_correlations(tcat, spectral, patient_weights)
 
@@ -188,12 +171,8 @@ def main():
         flush=True,
     )
     pairwise_draws, olambda_draws = correlation_draws(
-        data,
-        tcat_values,
-        tcat_weights,
-        olambda_values,
-        args.draws,
-        args.random_state,
+        data, tcat_values, tcat_weights, olambda_values,
+        args.draws, args.random_state,
     )
     summarize_olambda(feature_names, olambda_draws).to_csv(output_paths["olambda"], index=False)
     summarize_pairwise(feature_names, pairwise_draws).to_csv(output_paths["pairwise"], index=False)

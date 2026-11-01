@@ -49,7 +49,9 @@ def cluster_order(matrix):
     distance = np.clip(1 - matrix, 0, 2)
     distance = (distance + distance.T) / 2
     np.fill_diagonal(distance, 0)
-    return leaves_list(linkage(squareform(distance, checks=False), method="average"))
+    distances = squareform(distance, checks=False)
+    clusters = linkage(distances, method='average')
+    return leaves_list(clusters)
 
 
 def figure_annotations(features, olambda, survival):
@@ -85,48 +87,42 @@ def figure_annotations(features, olambda, survival):
 
 def draw_figure(matrix, annotations, title, output_path, figure_size,
                 label_size, marker_probability):
-    figure = plt.figure(figsize=figure_size)
+    fig = plt.figure(figsize=figure_size)
     if len(annotations) > 20:
         left, right, top, bottom = 0.17, 0.985, 0.94, 0.25
         annotation_height = 3.0
     else:
         left, right, top, bottom = 0.22, 0.97, 0.91, 0.30
         annotation_height = 2.4
-    grid = figure.add_gridspec(
-        2,
-        1,
-        height_ratios=[len(annotations), annotation_height],
-        left=left,
-        right=right,
-        top=top,
-        bottom=bottom,
+    grid = fig.add_gridspec(
+        2, 1, height_ratios=[len(annotations), annotation_height],
+        left=left, right=right, top=top, bottom=bottom,
         hspace=0.025,
     )
-    matrix_axis = figure.add_subplot(grid[0])
-    annotation_axis = figure.add_subplot(grid[1], sharex=matrix_axis)
+    ax = fig.add_subplot(grid[0])
+    ax_info = fig.add_subplot(grid[1], sharex=ax)
     edges = np.arange(len(annotations) + 1) - 0.5
 
-    matrix_values = matrix.copy()
-    np.fill_diagonal(matrix_values, np.nan)
-    matrix_map = plt.get_cmap("RdBu_r").copy()
-    matrix_map.set_bad("#f3f3f3")
-    matrix_image = matrix_axis.pcolormesh(
-        edges,
-        edges,
-        matrix_values,
-        cmap=matrix_map,
+    # Hide the diagonal, keeping both annotation rows aligned with the matrix
+    M = matrix.copy()
+    np.fill_diagonal(M, np.nan)
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad("#f3f3f3")
+    matrix_image = ax.pcolormesh(
+        edges, edges, M,
+        cmap=cmap,
         norm=TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1),
         shading="flat",
     )
-    matrix_axis.set_xlim(-0.5, len(annotations) - 0.5)
-    matrix_axis.set_ylim(len(annotations) - 0.5, -0.5)
-    matrix_axis.set_title(title, fontsize=14, pad=12)
-    matrix_axis.set_yticks(np.arange(len(annotations)))
-    matrix_axis.set_yticklabels(annotations.label, fontsize=label_size)
-    matrix_axis.tick_params(axis="x", bottom=False, labelbottom=False)
-    matrix_axis.tick_params(length=0)
+    ax.set_xlim(-0.5, len(annotations) - 0.5)
+    ax.set_ylim(len(annotations) - 0.5, -0.5)
+    ax.set_title(title, fontsize=14, pad=12)
+    ax.set_yticks(np.arange(len(annotations)))
+    ax.set_yticklabels(annotations.label, fontsize=label_size)
+    ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    ax.tick_params(length=0)
 
-    olambda_image = annotation_axis.pcolormesh(
+    olambda_image = ax_info.pcolormesh(
         edges,
         [-0.5, 0.5],
         annotations.O_lambda_rho_median.to_numpy()[None, :],
@@ -134,7 +130,7 @@ def draw_figure(matrix, annotations, title, output_path, figure_size,
         norm=TwoSlopeNorm(vmin=-0.4, vcenter=0, vmax=0.4),
         shading="flat",
     )
-    hr_image = annotation_axis.pcolormesh(
+    hr_image = ax_info.pcolormesh(
         edges,
         [0.5, 1.5],
         annotations.log2_HR.to_numpy()[None, :],
@@ -142,30 +138,27 @@ def draw_figure(matrix, annotations, title, output_path, figure_size,
         norm=TwoSlopeNorm(vmin=-0.75, vcenter=0, vmax=0.75),
         shading="flat",
     )
-    annotation_axis.set_xlim(-0.5, len(annotations) - 0.5)
-    annotation_axis.set_ylim(1.5, -0.5)
-    annotation_axis.set_yticks([0, 1])
-    annotation_axis.set_yticklabels(
+    ax_info.set_xlim(-0.5, len(annotations) - 0.5)
+    ax_info.set_ylim(1.5, -0.5)
+    ax_info.set_yticks([0, 1])
+    ax_info.set_yticklabels(
         [r"Corr. with $\mathcal{O}_{\lambda}^{\infty}$", r"$\log_2$(HR)"],
         fontsize=8,
     )
-    annotation_axis.set_xticks(np.arange(len(annotations)))
-    annotation_axis.set_xticklabels(
-        annotations.label,
-        rotation=90,
-        ha="center",
-        va="top",
+    ax_info.set_xticks(np.arange(len(annotations)))
+    ax_info.set_xticklabels(
+        annotations.label, rotation=90, ha="center", va="top",
         fontsize=label_size,
     )
-    annotation_axis.tick_params(length=0)
+    ax_info.tick_params(length=0)
 
     marker_size = 5 if len(annotations) > 20 else 18
     for column, row in enumerate(annotations.itertuples(index=False)):
         if row.P_O_lambda_same_direction >= marker_probability:
-            annotation_axis.scatter(column, 0, s=marker_size, color="black")
+            ax_info.scatter(column, 0, s=marker_size, color="black")
         if row.HR_interval_excludes_1:
-            annotation_axis.scatter(column, 1, s=marker_size, color="black")
-    for axis in [matrix_axis, annotation_axis]:
+            ax_info.scatter(column, 1, s=marker_size, color="black")
+    for axis in [ax, ax_info]:
         for spine in axis.spines.values():
             spine.set_visible(False)
 
@@ -179,17 +172,17 @@ def draw_figure(matrix, annotations, title, output_path, figure_size,
         (hr_image, r"$\log_2$(HR)"),
     ]
     for start, (image, label) in zip(starts, colorbars):
-        colorbar = figure.colorbar(
+        colorbar = fig.colorbar(
             image,
-            cax=figure.add_axes([start, 0.055, colorbar_width, 0.014]),
+            cax=fig.add_axes([start, 0.055, colorbar_width, 0.014]),
             orientation="horizontal",
         )
         colorbar.set_label(label, fontsize=8)
         colorbar.ax.tick_params(labelsize=7)
 
-    figure.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
-    figure.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
-    plt.close(figure)
+    fig.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
 
 
 def main():
@@ -214,20 +207,16 @@ def main():
         "gep": olambda.loc[olambda.feature_kind.eq("GEP"), "feature"].tolist(),
         "cell_type": olambda.loc[olambda.feature_kind.eq("cell_type"), "feature"].tolist(),
     }
-    settings = {
-        "gep": {
-            "title": "GEP correlation structure, spectral organization, and survival effects",
-            "size": (15.5, 16.5),
-            "label_size": 6.4,
-        },
-        "cell_type": {
-            "title": "Cell-type correlation structure, spectral organization, and survival effects",
-            "size": (8.5, 9.5),
-            "label_size": 9,
-        },
-    }
-
     for group, features in groups.items():
+        if group == 'gep':
+            title = 'GEP correlation structure, spectral organization, and survival effects'
+            size = (15.5, 16.5)
+            label_size = 6.4
+        else:
+            title = 'Cell-type correlation structure, spectral organization, and survival effects'
+            size = (8.5, 9.5)
+            label_size = 9
+
         matrix = correlation_matrix(features, pairwise)
         order = cluster_order(matrix)
         ordered_features = [features[index] for index in order]
@@ -235,13 +224,7 @@ def main():
         annotations = figure_annotations(ordered_features, olambda, survival)
         stem = args.output_dir / f"{group}_correlation_matrix"
         draw_figure(
-            matrix,
-            annotations,
-            settings[group]["title"],
-            stem,
-            settings[group]["size"],
-            settings[group]["label_size"],
-            args.marker_probability,
+            matrix, annotations, title, stem, size, label_size, args.marker_probability,
         )
         annotations.to_csv(args.output_dir / f"{group}_ordered_annotations.csv", index=False)
         pd.DataFrame(matrix, index=ordered_features, columns=ordered_features).to_csv(

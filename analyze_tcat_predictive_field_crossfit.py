@@ -39,12 +39,14 @@ def main():
         "sample_id": archive["patient_ids"].astype(str),
         "particle_row": np.arange(len(archive["patient_ids"])),
     })
+    # Full-cohort regimes; only the clinical field is cross-fitted
     membership = pd.read_csv(args.olambda_regime_membership_csv)[[
         "Dataset", "sample_id", "posterior_mean_probability_high"
     ]]
     patients = patients.merge(
         membership, on=["Dataset", "sample_id"], how="inner", validate="one_to_one"
-    ).sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
+    )
+    patients = patients.sort_values(['Dataset', 'sample_id']).reset_index(drop=True)
     rows = patients.particle_row.to_numpy(int)
     values = np.asarray(archive["values"][rows][:, :, gep_indices], dtype=float)
     particle_weights = np.asarray(archive["particle_weights"][rows], dtype=float)
@@ -61,9 +63,7 @@ def main():
     fold_null = {}
     for fold_number, heldout in enumerate(sorted(patients.Dataset.unique()), start=1):
         index = np.flatnonzero(datasets == heldout)
-        high_probability = patients.loc[
-            index, "posterior_mean_probability_high"
-        ].to_numpy(float)
+        high_probability = patients.loc[index, 'posterior_mean_probability_high'].to_numpy(float)
         effective_high = high_probability.sum()
         effective_low = len(index) - effective_high
         if min(effective_high, effective_low) < args.minimum_effective_regime:
@@ -73,7 +73,8 @@ def main():
             )
             continue
 
-        effects = crossfit.loc[crossfit.heldout_dataset.astype(str).eq(heldout)].set_index("feature")
+        keep = crossfit.heldout_dataset.astype(str).eq(heldout)
+        effects = crossfit.loc[keep].set_index('feature')
         missing = sorted(set(gep_names).difference(effects.index.astype(str)))
         if missing:
             raise ValueError(f"Cross-fitted field for {heldout} is missing {len(missing)} GEPs.")
@@ -124,11 +125,10 @@ def main():
         null_mean = null.mean(axis=0)
         null_sd = np.maximum(null.std(axis=0, ddof=1), 1e-12)
         standardized_null.append((null - null_mean) / null_sd * DESIRED_SIGN)
+    # Give each held-out dataset equal weight in the combined test
     standardized_null = np.stack(standardized_null, axis=0)
     for metric_index, metric in enumerate(METRICS):
-        observed = np.mean(
-            folds[f"z__{metric}"].to_numpy(float) * DESIRED_SIGN[metric_index]
-        )
+        observed = np.mean(folds[f'z__{metric}'].to_numpy(float) * DESIRED_SIGN[metric_index])
         null = standardized_null[:, :, metric_index].mean(axis=0)
         p = (1 + np.sum(null >= observed)) / (len(null) + 1)
         combined_rows.append({
@@ -141,20 +141,18 @@ def main():
                 * DESIRED_SIGN[metric_index] > 0
             )),
         })
-    observed_joint = np.mean([
-        row[f"z__{metric}"] * DESIRED_SIGN[index]
-        for _, row in folds.iterrows()
-        for index, metric in enumerate(METRICS)
-    ])
+    oriented_z = []
+    for _, row in folds.iterrows():
+        for index, metric in enumerate(METRICS):
+            oriented_z.append(row[f'z__{metric}'] * DESIRED_SIGN[index])
+    observed_joint = np.mean(oriented_z)
     null_joint = standardized_null.mean(axis=(0, 2))
     combined_rows.append({
         "metric": "three_metric_joint",
         "datasets": len(folds),
         "mean_oriented_z": observed_joint,
         "permutation_p": (1 + np.sum(null_joint >= observed_joint)) / (len(null_joint) + 1),
-        "datasets_in_expected_direction": int(np.sum(
-            folds.joint_oriented_z.to_numpy(float) > 0
-        )),
+        "datasets_in_expected_direction": int(np.sum(folds.joint_oriented_z.to_numpy(float) > 0)),
     })
     combined = pd.DataFrame(combined_rows)
     combined.to_csv(args.output_dir / "crossfit_predictive_field_combined.csv", index=False)

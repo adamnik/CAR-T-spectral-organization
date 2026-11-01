@@ -103,6 +103,7 @@ def main():
     completed_rows = []
     errors = []
     for fold_number, heldout in enumerate(datasets, start=1):
+        # Fit and standardize using the remaining datasets
         keep = data.Dataset.astype(str).ne(heldout).to_numpy()
         training_data = data.loc[keep].reset_index(drop=True)
         training_central = central[keep]
@@ -126,9 +127,7 @@ def main():
             )
             feature_dir.mkdir(parents=True, exist_ok=True)
             result_path = feature_dir / "model_result.csv"
-            print(
-                f"[{feature_number}/{len(gep_names)}] {feature}", flush=True
-            )
+            print(f'[{feature_number}/{len(gep_names)}] {feature}', flush=True)
             if result_path.exists() and not args.overwrite:
                 result = pd.read_csv(result_path).iloc[0].to_dict()
                 print("  RESUME", flush=True)

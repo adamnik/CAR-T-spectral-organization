@@ -12,7 +12,7 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
-from analysis_io import safe_name
+from analysis_io import safe_name, feature_kind
 from survival_model import alignment_summary, baseline_parameters, diagnostics, effect_summary
 from survival_model import hierarchical_parameters, interval_loglikelihood, load_tcat_analysis
 from survival_model import marginalize_particles, model_coordinates, summarize_effects, survival_arrays
@@ -20,14 +20,6 @@ from survival_model import marginalize_particles, model_coordinates, summarize_e
 
 JOINT_GLOBAL_SCALE = 0.30
 JOINT_DATASET_SCALE = 0.20
-
-
-def feature_kind(feature):
-    if feature.startswith("TCAT_GEP_"):
-        return "GEP"
-    if "_proportion_" in feature:
-        return "cell_type"
-    return "score"
 
 
 def individual_features(feature_names, requested, requested_kind, maximum):
@@ -86,6 +78,7 @@ def standardize_joint(central, particles, feature_names, blocks):
     for block, index in block_slices(blocks):
         block_central = central[:, index]
         center = block_central.mean(axis=0)
+        # One scale per composition preserves the CLR zero-sum constraint
         scale = float(np.sqrt(np.mean(block_central.var(axis=0, ddof=1))))
         if not np.isfinite(scale) or scale <= 0:
             raise ValueError(f"TCAT block {block!r} has no patient-level variation.")
@@ -107,10 +100,8 @@ def center_coefficients(values, blocks):
 
 def sample_model(args):
     return pm.sample(
-        draws=args.draws,
-        tune=args.tune,
-        chains=args.chains,
-        cores=args.cores,
+        draws=args.draws, tune=args.tune,
+        chains=args.chains, cores=args.cores,
         target_accept=args.target_accept,
         init="adapt_diag",
         random_seed=args.random_state,
@@ -148,20 +139,18 @@ def individual_model(feature, feature_index, data, central, particles, particle_
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     result, dataset_results = summarize_effects(idata, arrays["datasets"])
     result.update(diagnostic_values)
-    result.update(
-        {
-            "feature": feature,
-            "feature_kind": feature_kind(feature),
-            "effect_unit": "per global SD of the central patient estimate",
-            "center": center,
-            "scale": scale,
-            "patients": len(data),
-            "events": int(data.event_observed.sum()),
-            "datasets": len(arrays["datasets"]),
-            "particles": particles.shape[1],
-            "wall_time_seconds": elapsed,
-        }
-    )
+    result.update({
+        "feature": feature,
+        "feature_kind": feature_kind(feature),
+        "effect_unit": "per global SD of the central patient estimate",
+        "center": center,
+        "scale": scale,
+        "patients": len(data),
+        "events": int(data.event_observed.sum()),
+        "datasets": len(arrays["datasets"]),
+        "particles": particles.shape[1],
+        "wall_time_seconds": elapsed,
+    })
     dataset_results.insert(0, "feature", feature)
 
     pd.DataFrame([result]).to_csv(output_dir / "model_result.csv", index=False)
@@ -188,14 +177,12 @@ def summarize_joint(idata, features, datasets, mode):
         row["joint_dataset_scale_median"] = float(np.median(dataset_scale))
         feature_rows.append(row)
         for dataset_index, dataset in enumerate(datasets):
-            dataset_rows.append(
-                {
-                    "mode": mode,
-                    "feature": feature,
-                    "Dataset": dataset,
-                    **effect_summary(dataset_effect[:, dataset_index, feature_index]),
-                }
-            )
+            dataset_rows.append({
+                "mode": mode,
+                "feature": feature,
+                "Dataset": dataset,
+                **effect_summary(dataset_effect[:, dataset_index, feature_index]),
+            })
     return pd.DataFrame(feature_rows), pd.DataFrame(dataset_rows)
 
 
@@ -333,14 +320,12 @@ def main():
                         arrays, args, feature_dir,
                     )
                 except Exception as error:
-                    errors.append(
-                        {
-                            "feature": feature,
-                            "error_type": type(error).__name__,
-                            "error": str(error),
-                            "traceback": traceback.format_exc(),
-                        }
-                    )
+                    errors.append({
+                        "feature": feature,
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                        "traceback": traceback.format_exc(),
+                    })
                     pd.DataFrame(errors).to_csv(args.output_dir / "individual_errors.csv", index=False)
                     print(f"ERROR {type(error).__name__}: {error}", flush=True)
                     continue

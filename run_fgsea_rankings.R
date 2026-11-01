@@ -19,6 +19,7 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 ranking <- fread(ranking_path, header = FALSE, col.names = c("gene", "score"))
 ranking <- ranking[is.finite(score) & !duplicated(gene)]
+# Keep the full ranking; gene names break ties consistently
 setorder(ranking, -score, gene)
 statistics <- ranking$score
 names(statistics) <- ranking$gene
@@ -26,9 +27,7 @@ names(statistics) <- ranking$gene
 collections <- list(
     Hallmark = msigdbr(species = "Homo sapiens", collection = "H"),
     Reactome = msigdbr(
-        species = "Homo sapiens",
-        collection = "C2",
-        subcollection = "CP:REACTOME"
+        species = "Homo sapiens", collection = "C2", subcollection = "CP:REACTOME"
     )
 )
 
@@ -48,10 +47,8 @@ for (collection_name in names(collections)) {
     )
     pathways <- split(membership$gene_symbol, membership$gs_name)
     result <- as.data.table(fgseaMultilevel(
-        pathways = pathways,
-        stats = statistics,
-        minSize = min_size,
-        maxSize = max_size,
+        pathways = pathways, stats = statistics,
+        minSize = min_size, maxSize = max_size,
         eps = 0,
         nPermSimple = 100000,
         gseaParam = 1
@@ -69,6 +66,7 @@ for (collection_name in names(collections)) {
 }
 
 combined <- rbindlist(all_results, use.names = TRUE, fill = TRUE)
+# Also report FDR across both collections
 combined[, padj_all_collections := p.adjust(pval, method = "BH")]
 combined <- combined[order(padj, -abs(NES), na.last = TRUE)]
 fwrite(combined, file.path(output_dir, "fgsea_all_collections.csv"))

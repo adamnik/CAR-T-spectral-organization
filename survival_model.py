@@ -48,10 +48,7 @@ def load_olambda_analysis(
         if candidate.exists():
             particles_path = candidate
     if particles_path is None:
-        numeric_columns.extend([
-            "log_O_minus_1_inf_location",
-            "log_O_minus_1_inf_scale",
-        ])
+        numeric_columns.extend(['log_O_minus_1_inf_location', 'log_O_minus_1_inf_scale'])
     for column in numeric_columns:
         data[column] = pd.to_numeric(data[column], errors="coerce")
     # Keep the analysis cohort
@@ -90,9 +87,7 @@ def load_olambda_analysis(
             how="left",
             validate="one_to_one",
         ).sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
-        raw_particles = data[particle_columns].apply(
-            pd.to_numeric, errors="coerce"
-        ).to_numpy(float)
+        raw_particles = data[particle_columns].apply(pd.to_numeric, errors='coerce').to_numpy(float)
         data = data.drop(columns=particle_columns)
         if np.any(~np.isfinite(raw_particles)) or np.any(raw_particles <= 1):
             raise ValueError("O_lambda particles must be finite and greater than one.")
@@ -140,14 +135,12 @@ def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cel
     feature_names = archive["feature_names"].astype(str).tolist()
     n_cells = np.asarray(archive["n_cells"], dtype=int)
 
-    particle_index = pd.DataFrame(
-        {
-            "Dataset": datasets,
-            "sample_id": patient_ids,
-            "n_cells": n_cells,
-            "particle_index": np.arange(len(patient_ids)),
-        }
-    )
+    particle_index = pd.DataFrame({
+        "Dataset": datasets,
+        "sample_id": patient_ids,
+        "n_cells": n_cells,
+        "particle_index": np.arange(len(patient_ids)),
+    })
     data = particle_index.merge(
         estimates[["Dataset", "sample_id", *feature_names]],
         on=["Dataset", "sample_id"],

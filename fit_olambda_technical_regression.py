@@ -51,12 +51,7 @@ def load_analysis(estimates_path, technical_particles_path, olambda_particles_pa
     if not olambda_columns:
         raise ValueError("No particle_* columns were found in the O-lambda table.")
     olambda = olambda[["Dataset", "sample_id", *olambda_columns]]
-    data = data.merge(
-        olambda,
-        on=["Dataset", "sample_id"],
-        how="inner",
-        validate="one_to_one",
-    )
+    data = data.merge(olambda, on=['Dataset', 'sample_id'], how='inner', validate='one_to_one')
     data = data.loc[data.n_cells >= minimum_cells].copy()
     data = data.sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
     if data.empty:
@@ -65,9 +60,11 @@ def load_analysis(estimates_path, technical_particles_path, olambda_particles_pa
     order = data.technical_index.to_numpy(int)
     technical_values = technical_values[order]
     technical_weights = technical_weights[order]
-    olambda_values = data[olambda_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    olambda_values = data[olambda_columns].apply(pd.to_numeric, errors='coerce')
+    olambda_values = olambda_values.to_numpy(float)
     data = data.drop(columns=["technical_index", *olambda_columns])
-    central_x = data[feature_names].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    central_x = data[feature_names].apply(pd.to_numeric, errors='coerce')
+    central_x = central_x.to_numpy(float)
     central_y = olambda_values.mean(axis=1)
 
     if technical_values.shape[:2] != technical_weights.shape:
@@ -80,11 +77,7 @@ def load_analysis(estimates_path, technical_particles_path, olambda_particles_pa
     if np.any(technical_weights < 0) or np.any(technical_weights.sum(axis=1) <= 0):
         raise ValueError("Technical particle weights must be nonnegative and have positive mass.")
     technical_weights /= technical_weights.sum(axis=1, keepdims=True)
-    olambda_weights = np.full(
-        olambda_values.shape,
-        1.0 / olambda_values.shape[1],
-        dtype=float,
-    )
+    olambda_weights = np.full(olambda_values.shape, 1.0 / olambda_values.shape[1], dtype=float)
     return (
         data, feature_names,
         central_x, technical_values, technical_weights,
@@ -95,6 +88,7 @@ def load_analysis(estimates_path, technical_particles_path, olambda_particles_pa
 def standardize(central_x, particle_x, central_y, particle_y, training_rows=None):
     if training_rows is None:
         training_rows = np.arange(len(central_y))
+    # Use training patients only when holding out a dataset
     x_center = central_x[training_rows].mean(axis=0)
     x_scale = central_x[training_rows].std(axis=0, ddof=1)
     y_center = central_y[training_rows].mean()
@@ -134,6 +128,7 @@ def within_dataset(values, dataset_index):
 
 def patient_loglikelihood(observed_y, predictor_mean, residual_sd,
                           y_weights, x_weights):
+    # Integrate over every O-lambda / technical-particle pair
     y = pt.as_tensor_variable(observed_y)[:, :, None]
     mean = predictor_mean[:, None, :]
     logp = pm.logp(pm.Normal.dist(mu=mean, sigma=residual_sd), y)
@@ -145,9 +140,7 @@ def patient_loglikelihood(observed_y, predictor_mean, residual_sd,
 def intercepts(dataset_names):
     global_intercept = pm.Normal("global_intercept", 0, 1)
     dataset_intercept_sd = pm.HalfNormal("dataset_intercept_sd", DATASET_INTERCEPT_SD)
-    dataset_intercept_raw = pm.Normal(
-        "dataset_intercept_raw", 0, 1, dims="dataset"
-    )
+    dataset_intercept_raw = pm.Normal('dataset_intercept_raw', 0, 1, dims='dataset')
     dataset_intercept = pm.Deterministic(
         "dataset_intercept",
         global_intercept + dataset_intercept_sd * dataset_intercept_raw,
@@ -206,9 +199,7 @@ def individual_model(feature, feature_index, data, arrays, weights, args, output
             particle_y, predictor_mean, residual_sd, y_weights, x_weights
         )
         pm.Potential("regression_loglikelihood", pt.sum(likelihood))
-        centered_x = within_dataset(
-            central_x[:, [feature_index]], dataset_index
-        ).ravel()
+        centered_x = within_dataset(central_x[:, [feature_index]], dataset_index).ravel()
         technical_prediction = (
             dataset_effect[dataset_index]
             * pt.as_tensor_variable(centered_x)
@@ -245,9 +236,7 @@ def individual_model(feature, feature_index, data, arrays, weights, args, output
         "P_all_datasets_same_direction": np.mean(
             np.all(dataset_draws > 0, axis=1) | np.all(dataset_draws < 0, axis=1)
         ),
-        "dataset_effect_sd_median": np.median(
-            np.asarray(idata.posterior.dataset_effect_sd)
-        ),
+        "dataset_effect_sd_median": np.median(np.asarray(idata.posterior.dataset_effect_sd)),
         "technical_R2_median": np.median(r2_draws),
         "technical_R2_q025": np.quantile(r2_draws, 0.025),
         "technical_R2_q975": np.quantile(r2_draws, 0.975),
@@ -295,9 +284,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
     with pm.Model(coords=coordinates):
         global_intercept, dataset_intercept = intercepts(datasets)
         coefficient_scale = pm.HalfNormal("coefficient_scale", GLOBAL_EFFECT_SD)
-        coefficient = pm.Normal(
-            "coefficient", 0, coefficient_scale, dims="feature"
-        )
+        coefficient = pm.Normal('coefficient', 0, coefficient_scale, dims='feature')
         residual_sd = pm.HalfNormal("residual_sd", 1)
         predictor_mean = dataset_intercept[dataset_index, None] + pt.sum(
             pt.as_tensor_variable(x) * coefficient[None, None, :],
@@ -324,10 +311,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
 
         started = time.time()
         idata = pm.sample(
-            **sampling_kwargs(
-                args,
-                args.random_state if random_state is None else random_state,
-            )
+            **sampling_kwargs(args, args.random_state if random_state is None else random_state)
         )
         elapsed = time.time() - started
 
@@ -362,9 +346,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([result]).to_csv(output_dir / "model_result.csv", index=False)
-    pd.DataFrame(coefficient_results).to_csv(
-        output_dir / "coefficient_results.csv", index=False
-    )
+    pd.DataFrame(coefficient_results).to_csv(output_dir / 'coefficient_results.csv', index=False)
     summary.to_csv(output_dir / "posterior_summary.csv")
     if save_posterior:
         idata.to_netcdf(output_dir / "posterior.nc")
@@ -384,9 +366,7 @@ def run_individual(data, feature_names, arrays, weights, args):
             print("  completed; loading saved result", flush=True)
             results.append(pd.read_csv(result_path).iloc[0].to_dict())
             continue
-        result = individual_model(
-            feature, index, data, arrays, weights, args, output
-        )
+        result = individual_model(feature, index, data, arrays, weights, args, output)
         results.append(result)
         print(pd.DataFrame([result]).to_string(index=False), flush=True)
     pd.DataFrame(results).to_csv(root / "individual_results.csv", index=False)
@@ -399,9 +379,7 @@ def run_joint(data, feature_names, arrays, weights, args):
         print("Joint model already completed.", flush=True)
         print(pd.read_csv(result_path).to_string(index=False), flush=True)
         return
-    result, coefficients, _ = joint_model(
-        data, feature_names, arrays, weights, args, output
-    )
+    result, coefficients, _ = joint_model(data, feature_names, arrays, weights, args, output)
     print(pd.DataFrame([result]).to_string(index=False), flush=True)
     print(pd.DataFrame(coefficients).to_string(index=False), flush=True)
 
@@ -500,9 +478,7 @@ def main():
     parser.add_argument("technical_particles_npz", type=Path)
     parser.add_argument("olambda_particles_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
-    parser.add_argument(
-        "--mode", choices=["individual", "joint", "lodo", "all"], default="all"
-    )
+    parser.add_argument('--mode', choices=['individual', 'joint', 'lodo', 'all'], default='all')
     parser.add_argument("--minimum-cells", type=int, default=1000)
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
@@ -515,20 +491,13 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    loaded = load_analysis(
-        args.technical_estimates_csv,
-        args.technical_particles_npz,
-        args.olambda_particles_csv,
-        args.minimum_cells,
+    (data, feature_names,
+     central_x, technical_values, technical_weights,
+     central_y, olambda_values, olambda_weights) = load_analysis(
+        args.technical_estimates_csv, args.technical_particles_npz,
+        args.olambda_particles_csv, args.minimum_cells,
     )
-    (
-        data, feature_names,
-        central_x, technical_values, technical_weights,
-        central_y, olambda_values, olambda_weights,
-    ) = loaded
-    standardized, scaling = standardize(
-        central_x, technical_values, central_y, olambda_values
-    )
+    standardized, scaling = standardize(central_x, technical_values, central_y, olambda_values)
     arrays = (
         standardized["central_x"], standardized["particle_x"],
         standardized["central_y"], standardized["particle_y"],
@@ -573,10 +542,7 @@ def main():
         run_joint(data, feature_names, arrays, weights, args)
     if args.mode in ["lodo", "all"]:
         original = (central_x, technical_values, central_y, olambda_values)
-        run_lodo(
-            data, feature_names, original,
-            technical_weights, olambda_weights, args,
-        )
+        run_lodo(data, feature_names, original, technical_weights, olambda_weights, args)
 
 
 if __name__ == "__main__":

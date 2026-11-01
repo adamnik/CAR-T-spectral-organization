@@ -38,12 +38,10 @@ def selected_contexts(continuous_results, regime_results, regime_memberships,
                       olambda_membership, olambda_result):
     continuous = pd.read_csv(continuous_results)
     regimes = pd.read_csv(regime_results)
-    continuous_significant = set(continuous.loc[
-        continuous.HR_q025.gt(1) | continuous.HR_q975.lt(1), "feature"
-    ].astype(str))
-    regime_significant = set(regimes.loc[
-        regimes.HR_q025.gt(1) | regimes.HR_q975.lt(1), "feature"
-    ].astype(str))
+    continuous_hit = continuous.HR_q025.gt(1) | continuous.HR_q975.lt(1)
+    continuous_significant = set(continuous.loc[continuous_hit, 'feature'].astype(str))
+    regime_hit = regimes.HR_q025.gt(1) | regimes.HR_q975.lt(1)
+    regime_significant = set(regimes.loc[regime_hit, 'feature'].astype(str))
     selected = sorted(continuous_significant | regime_significant | set(SCORE_CONTEXTS))
     selected = [
         feature for feature in selected
@@ -102,9 +100,10 @@ def align_analysis(tcat_path, contexts, continuous):
     membership_columns = []
     for number, context in enumerate(contexts):
         column = f"membership_{number:03d}"
-        table = context["membership"][[
-            "Dataset", "sample_id", "posterior_mean_probability_high"
-        ]].rename(columns={"posterior_mean_probability_high": column})
+        table = context['membership'][[
+            'Dataset', 'sample_id', 'posterior_mean_probability_high'
+        ]]
+        table = table.rename(columns={'posterior_mean_probability_high': column})
         patients = patients.merge(
             table, on=["Dataset", "sample_id"], how="inner", validate="one_to_one"
         )
@@ -119,9 +118,9 @@ def align_analysis(tcat_path, contexts, continuous):
     values = np.asarray(archive["values"][rows][:, :, gep_indices], dtype=float)
     particle_weights = np.asarray(archive["particle_weights"][rows], dtype=float)
     particle_weights /= particle_weights.sum(axis=1, keepdims=True)
-    beta = np.log(
-        continuous.set_index("feature").loc[gep_names, "HR_median"].to_numpy(float)
-    )
+    # Fixed clinical field from the continuous survival fits
+    effects = continuous.set_index('feature').loc[gep_names, 'HR_median']
+    beta = np.log(effects.to_numpy(float))
 
     for number, context in enumerate(contexts):
         membership = patients[membership_columns[number]].to_numpy(float)
@@ -138,10 +137,10 @@ def posterior_states(values, particle_weights, datasets, draws, random_state):
     adjusted = np.empty_like(raw)
     bootstrap_weights = np.empty((draws, n_patients), dtype=np.float32)
     for draw in range(draws):
-        particle_index = np.asarray([
-            rng.choice(n_particles, p=particle_weights[patient])
-            for patient in range(n_patients)
-        ])
+        particle_index = []
+        for patient in range(n_patients):
+            particle_index.append(rng.choice(n_particles, p=particle_weights[patient]))
+        particle_index = np.asarray(particle_index)
         weights = rng.dirichlet(np.ones(n_patients))
         state = values[np.arange(n_patients), particle_index]
         raw[draw] = state
@@ -157,8 +156,10 @@ def posterior_median_correlations(states, bootstrap_weights, membership, indices
     for draw in range(n_draws):
         weights = bootstrap_weights[draw, indices]
         values = states[draw, indices]
-        high[draw] = weighted_correlation(values, weights * membership)
-        low[draw] = weighted_correlation(values, weights * (1 - membership))
+        high_weights = weights * membership
+        high[draw] = weighted_correlation(values, high_weights)
+        low_weights = weights * (1 - membership)
+        low[draw] = weighted_correlation(values, low_weights)
     return np.median(high, axis=0), np.median(low, axis=0)
 
 
@@ -246,11 +247,8 @@ def main():
 
     regime_memberships = load_regime_memberships(args.tcat_regime_dir)
     contexts, continuous = selected_contexts(
-        args.continuous_results_csv,
-        args.tcat_regime_results_csv,
-        regime_memberships,
-        args.olambda_regime_membership_csv,
-        args.olambda_regime_result_csv,
+        args.continuous_results_csv, args.tcat_regime_results_csv, regime_memberships,
+        args.olambda_regime_membership_csv, args.olambda_regime_result_csv,
     )
     patients, features, values, particle_weights, beta = align_analysis(
         args.tcat_particles_npz, contexts, continuous
@@ -275,6 +273,7 @@ def main():
     matrix_dir.mkdir(exist_ok=True)
     started = time.time()
     for context_number, context in enumerate(contexts, start=1):
+        # A contextual GEP does not contribute to its own evaluated graph
         graph_indices = np.flatnonzero(features != context["context"])
         graph_features = features[graph_indices]
         graph_beta = beta[graph_indices]
@@ -389,9 +388,7 @@ def main():
         "random_state": args.random_state,
         "runtime_minutes": (time.time() - started) / 60,
     }
-    (args.output_dir / "predictive_field_manifest.json").write_text(
-        json.dumps(manifest, indent=2)
-    )
+    (args.output_dir / 'predictive_field_manifest.json').write_text(json.dumps(manifest, indent=2))
     print("\nResults:", args.output_dir / "predictive_field_context_results.csv", flush=True)
 
 
