@@ -144,7 +144,7 @@ python extract_string_pseudobulk.py \
 
 The manifest has columns `Dataset` and `h5ad_path`. The output contains every shared STRING gene in a common order; genes are not selected using their association with O-lambda.
 
-`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset effects together with the corrected treatment contrasts identifiable within datasets.
+`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset effects together with treatment indicators estimated only within datasets containing more than one observed treatment.
 
 ```bash
 python estimate_gene_olambda_correlations.py \

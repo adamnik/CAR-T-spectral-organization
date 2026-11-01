@@ -15,23 +15,12 @@ import pandas as pd
 import torch
 
 from analysis_io import safe_name
-from extract_olambda_trajectories import (
-    atomic_csv,
-    atomic_json,
-    binary_plugin_mi,
-    canonical_sample_id,
-    matrix_to_memory,
-    spectral_organization,
-    stable_seed,
-    upsert_csv,
-)
+from extract_olambda_trajectories import atomic_csv, atomic_json, binary_plugin_mi
+from extract_olambda_trajectories import matrix_to_memory, spectral_organization
+from extract_olambda_trajectories import stable_seed, upsert_csv
 
 
-EXPERIMENTS = [
-    "patient-bootstrap",
-    "cell-type-standardized",
-    "pooled-synthetic",
-]
+EXPERIMENTS = ['patient-bootstrap', 'cell-type-standardized', 'pooled-synthetic']
 
 
 def integer_quotas(proportions, total):
@@ -71,6 +60,7 @@ def draw_block(indices, count, rng):
 
 def read_rows(matrix, rows):
     rows = np.asarray(rows, dtype=int)
+    # Read each cell once, then restore repeats from sampling with replacement
     unique, inverse = np.unique(rows, return_inverse=True)
     values = matrix_to_memory(matrix[unique, :])
     return values[inverse]
@@ -129,16 +119,18 @@ def pooled_synthetic(rows_by_patient, labels, patient, target, target_cells, rng
     donor_counts = {}
 
     for cell_type, count in quotas.items():
-        donor_rows = {
-            donor: rows[labels[rows] == cell_type]
-            for donor, rows in rows_by_patient.items()
-            if donor != patient
-        }
-        donor_rows = {donor: rows for donor, rows in donor_rows.items() if len(rows)}
+        donor_rows = {}
+        for donor, rows in rows_by_patient.items():
+            if donor == patient:
+                continue
+            cells = rows[labels[rows] == cell_type]
+            if len(cells):
+                donor_rows[donor] = cells
         if not donor_rows:
             raise ValueError(
                 f"No leave-one-patient-out source cells exist for cell type {cell_type!r}."
             )
+        # Equal donor contributions within each cell type
         donor_quotas = equal_quotas(donor_rows, count, rng)
         for donor, donor_count in donor_quotas.items():
             if donor_count == 0:
@@ -148,11 +140,7 @@ def pooled_synthetic(rows_by_patient, labels, patient, target, target_cells, rng
             blocks.append((donor_count, weights))
             donor_counts[donor] = donor_counts.get(donor, 0) + int(donor_count)
 
-    return (
-        np.concatenate(selected),
-        weight_summary(blocks, target_cells),
-        donor_counts,
-    )
+    return (np.concatenate(selected), weight_summary(blocks, target_cells), donor_counts)
 
 
 def composition_rows(dataset, patient, replicate, experiment, target, realized,
@@ -190,9 +178,7 @@ def metadata_scan(manifest, sample_key, cell_type_key, minimum_patient_cells):
                 if len(timepoints) != 1 or timepoints[0] != "infusion":
                     raise ValueError(f"{row.h5ad_path} must contain infusion cells only.")
 
-            samples = data.obs[sample_key].astype(str).map(
-                lambda value: canonical_sample_id(value, row.Dataset)
-            )
+            samples = data.obs[sample_key].astype(str)
             labels = data.obs[cell_type_key].astype(str)
             if data.obs[cell_type_key].isna().any():
                 raise ValueError(f"Cell-type column {cell_type_key!r} contains missing values.")
@@ -262,7 +248,9 @@ def calculate_olambda(expression, gene_indices, device):
 
 def read_parts(directory):
     frames = [pd.read_csv(path) for path in sorted(directory.glob("*.csv"))]
-    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def rebuild_outputs(output_dir):
@@ -351,6 +339,7 @@ def main():
     atomic_csv(all_patients, args.output_dir / "eligible_patient_manifest.csv")
     atomic_csv(native_composition, args.output_dir / "native_cell_type_composition.csv")
 
+    # Reuse the same target composition when resuming
     common_target = None
     if args.experiment == "cell-type-standardized":
         target_path = args.output_dir / "common_cell_type_target.csv"
@@ -365,9 +354,7 @@ def main():
             )
             target_frame = common_target.rename("target_proportion").reset_index()
             target_frame.columns = ["cell_type", "target_proportion"]
-            target_frame["target_cells"] = integer_quotas(
-                common_target, args.target_cells
-            ).reindex(target_frame.cell_type).to_numpy()
+            target_frame["target_cells"] = integer_quotas(common_target, args.target_cells).reindex(target_frame.cell_type).to_numpy()
             atomic_csv(target_frame, target_path)
         print("Universal target cell types:", len(common_target), flush=True)
         print(target_frame.to_string(index=False), flush=True)
@@ -397,9 +384,7 @@ def main():
             and previous.get(key) != configuration[key]
         ]
         if changing:
-            raise ValueError(
-                f"Settings differ from this output directory: {changing}"
-            )
+            raise ValueError(f'Settings differ from this output directory: {changing}')
     atomic_json(configuration, configuration_path)
 
     total_jobs = len(patients) * args.replicates
@@ -408,9 +393,7 @@ def main():
         path = manifest.loc[manifest.Dataset.eq(dataset), "h5ad_path"].iloc[0]
         data = ad.read_h5ad(path, backed="r")
         try:
-            samples = data.obs[args.sample_key].astype(str).map(
-                lambda value: canonical_sample_id(value, dataset)
-            ).to_numpy()
+            samples = data.obs[args.sample_key].astype(str).to_numpy()
             labels = data.obs[args.cell_type_key].astype(str).to_numpy()
             source = data.X if args.layer is None else data.layers[args.layer]
             rows_by_patient = {

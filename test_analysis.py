@@ -111,7 +111,6 @@ class AnalysisChecks(unittest.TestCase):
             residual_expression, residual_predictor, weights
         )
         assert_allclose(actual, expected)
-        self.assertEqual(gene_correlations.patient_join_key('DC41_bai2024', 'Bai2024'), 'dc41')
 
     def test_predictive_field_metrics(self):
         correlation = np.array([

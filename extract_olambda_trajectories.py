@@ -20,35 +20,17 @@ from analysis_io import safe_name
 
 
 RESULT_COLUMNS = [
-    "Dataset",
-    "sample_id",
-    "trajectory_replicate",
-    "target_depth",
-    "n_cells_available",
-    "depth_fraction",
-    "schedule_rank",
-    "is_full_reference",
-    "cell_draw_seed",
-    "nested_unique_cells",
-    "gene_cell_fraction",
-    "graph_estimator",
-    "estimator_fingerprint",
-    "source_path",
-    "computed_at_utc",
-    "O_lambda",
-    "n_nodes_input",
-    "n_nodes_used",
-    "n_isolates_removed",
+    "Dataset", "sample_id", "trajectory_replicate", "target_depth",
+    "n_cells_available", "depth_fraction", "schedule_rank", "is_full_reference",
+    "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
+    "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
+    "O_lambda", "n_nodes_input", "n_nodes_used", "n_isolates_removed",
     "n_eigenvalues_near_one",
     "largest_eigenvalue",
     "lambda2_normalized_adjacency",
     "smallest_normalized_adjacency_eigenvalue",
-    "zero_deviation_case",
-    "k_min",
-    "n_genes_after_filter",
-    "graph_seconds_including_filter",
-    "spectral_seconds",
-    "total_seconds",
+    "zero_deviation_case", "k_min", "n_genes_after_filter",
+    "graph_seconds_including_filter", "spectral_seconds", "total_seconds",
 ]
 
 
@@ -69,28 +51,20 @@ def stable_seed(random_state, *parts):
     return int.from_bytes(hashlib.sha256(token).digest()[:8], "little") % (2**32)
 
 
-def normalized_id(value):
-    return "".join(character for character in str(value).lower() if character.isalnum())
-
-
-def canonical_sample_id(sample_id, dataset):
-    sample_id = str(sample_id).strip()
-    suffix = str(dataset).strip().lower()
-    if normalized_id(sample_id).endswith(normalized_id(suffix)):
-        return sample_id
-    return f"{sample_id}_{suffix}"
-
-
 def matrix_to_memory(matrix):
-    matrix = matrix.to_memory() if hasattr(matrix, "to_memory") else matrix
-    return matrix.tocsr() if sp.issparse(matrix) else np.asarray(matrix)
+    if hasattr(matrix, 'to_memory'):
+        matrix = matrix.to_memory()
+    if sp.issparse(matrix):
+        return matrix.tocsr()
+    return np.asarray(matrix)
 
 
 def upsert_csv(path, rows, keys):
     frame = pd.DataFrame(rows)
     if path.exists():
         frame = pd.concat([pd.read_csv(path), frame], ignore_index=True, sort=False)
-    frame = frame.drop_duplicates(keys, keep="last").sort_values(keys).reset_index(drop=True)
+    frame = frame.drop_duplicates(keys, keep='last')
+    frame = frame.sort_values(keys).reset_index(drop=True)
     atomic_csv(frame, path)
 
 
@@ -146,6 +120,7 @@ def binary_plugin_mi(expression, device, epsilon=1e-12):
 
     n_cells = float(binary.shape[0])
     detected = binary.sum(dim=0)
+    # Joint counts for detected / undetected gene pairs
     n11 = (binary.T @ binary).clamp_min_(0)
     n10 = (detected[:, None] - n11).clamp_min_(0)
     n01 = (detected[None, :] - n11).clamp_min_(0)
@@ -180,6 +155,7 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
         raise ValueError(f"{negative_edges} negative graph weights entered the spectral calculation.")
     graph.clamp_min_(0)
 
+    # Remove isolates before degree normalization
     degree = graph.sum(dim=1)
     keep = degree > isolate_epsilon
     n_nodes_input = int(graph.shape[0])
@@ -197,9 +173,8 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
 
     # Remove exactly one Perron mode and center the remaining relaxation times at one.
     nontrivial = eigenvalues[:-1]
-    relative_time = (
-        n_nodes_used / (n_nodes_used - 1)
-    ) * (1 - nontrivial).clamp_min(spectral_epsilon).reciprocal()
+    center = n_nodes_used / (n_nodes_used - 1)
+    relative_time = center * (1 - nontrivial).clamp_min(spectral_epsilon).reciprocal()
     weights = (relative_time - 1).square()
     if float(weights.sum().item()) <= 1e-12:
         olambda = 1.0
@@ -213,9 +188,7 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
         "n_nodes_input": n_nodes_input,
         "n_nodes_used": n_nodes_used,
         "n_isolates_removed": n_nodes_input - n_nodes_used,
-        "n_eigenvalues_near_one": int(
-            (eigenvalues > 1 - trivial_tolerance).sum().item()
-        ),
+        "n_eigenvalues_near_one": int((eigenvalues > 1 - trivial_tolerance).sum().item()),
         "largest_eigenvalue": float(eigenvalues[-1].item()),
         "lambda2_normalized_adjacency": float(nontrivial[-1].item()),
         "smallest_normalized_adjacency_eigenvalue": float(eigenvalues[0].item()),
@@ -259,13 +232,12 @@ def rebuild_outputs(parts_dir, results_path, summary_path, schedule):
         return
     keys = ["Dataset", "sample_id", "trajectory_replicate", "target_depth"]
     results = pd.concat(frames, ignore_index=True, sort=False)
-    results = results.drop_duplicates(keys, keep="last").sort_values(keys).reset_index(drop=True)
+    results = results.drop_duplicates(keys, keep='last')
+    results = results.sort_values(keys).reset_index(drop=True)
     results = results.reindex(columns=RESULT_COLUMNS)
     atomic_csv(results, results_path)
 
-    summary = results.groupby(
-        ["Dataset", "sample_id", "trajectory_replicate"], as_index=False
-    ).agg(
+    summary = results.groupby(['Dataset', 'sample_id', 'trajectory_replicate'], as_index=False).agg(
         n_cells_available=("n_cells_available", "max"),
         points_completed=("target_depth", "nunique"),
         minimum_depth=("target_depth", "min"),
@@ -329,9 +301,7 @@ def main():
         "minimum_state_count": args.minimum_state_count,
         "layer": args.layer,
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(estimator, sort_keys=True).encode()
-    ).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps(estimator, sort_keys=True).encode()).hexdigest()
     if config_path.exists():
         existing = json.loads(config_path.read_text())
         if existing["estimator_fingerprint"] != fingerprint:
@@ -352,9 +322,7 @@ def main():
             if len(timepoints) != 1 or timepoints[0] != "infusion":
                 raise ValueError("The input AnnData must contain infusion cells only.")
 
-        samples = adata.obs[args.sample_key].astype(str).map(
-            lambda value: canonical_sample_id(value, args.dataset_name)
-        ).to_numpy()
+        samples = adata.obs[args.sample_key].astype(str).to_numpy()
         patients = []
         for patient in sorted(pd.unique(samples)):
             rows = np.flatnonzero(samples == patient).astype(int)
@@ -449,10 +417,11 @@ def main():
                     schedule.sample_id.eq(patient)
                     & schedule.trajectory_replicate.eq(replicate)
                 ].sort_values(["is_full_reference", "target_depth"], ascending=[False, False])
-                patient_key = f"{args.dataset_name}|{patient}"
                 seed = stable_seed(
-                    args.random_state, "cell-permutation", patient_key, replicate
+                    args.random_state, 'cell-permutation',
+                    args.dataset_name, patient, replicate,
                 )
+                # One cell order gives nested samples at every depth
                 order = np.random.default_rng(seed).permutation(len(rows))
                 print(f"  replicate {replicate}: {len(jobs)} requested, {len(done)} completed", flush=True)
 

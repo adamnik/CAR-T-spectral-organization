@@ -11,11 +11,7 @@ import scipy.sparse as sp
 
 
 METADATA_COLUMNS = [
-    "Dataset",
-    "sample_id",
-    "patient_key",
-    "phase",
-    "n_cells",
+    "Dataset", "sample_id", "phase", "n_cells",
     "library_size_common_genes",
 ]
 
@@ -69,6 +65,7 @@ def accumulate_patients(data, dataset, common_genes, sample_key, count_source, b
     columns = genes.get_indexer(common_genes)
     if np.any(columns < 0):
         raise RuntimeError("The shared-gene lookup failed.")
+    # Backed h5ad reads need sorted columns; restore the common gene order below
     column_order = np.argsort(columns)
     sorted_columns = columns[column_order]
     restore_order = np.argsort(column_order)
@@ -89,11 +86,10 @@ def accumulate_patients(data, dataset, common_genes, sample_key, count_source, b
         n_cells += np.bincount(block_codes, minlength=len(patients))
 
         if sp.issparse(block):
+            # Map cells to patient rows before summing their counts
+            cell_index = np.arange(len(block_codes))
             indicator = sp.csr_matrix(
-                (
-                    np.ones(len(block_codes), dtype=float),
-                    (block_codes, np.arange(len(block_codes))),
-                ),
+                (np.ones(len(block_codes), dtype=float), (block_codes, cell_index)),
                 shape=(len(patients), len(block_codes)),
             )
             counts += (indicator @ block).toarray()
@@ -103,16 +99,17 @@ def accumulate_patients(data, dataset, common_genes, sample_key, count_source, b
         if block_number % 10 == 0 or stop == data.n_obs:
             print(f"  cells {stop:,}/{data.n_obs:,}", flush=True)
 
+    # CPM denominator uses only the shared STRING genes
     library_size = counts.sum(axis=1)
     if np.any(library_size <= 0):
         failed = np.asarray(patients)[library_size <= 0].tolist()
         raise ValueError(f"Zero shared-STRING-gene library size: {failed[:10]}")
-    logcpm = np.log2(counts / library_size[:, None] * 1_000_000.0 + 1.0)
+    cpm = counts / library_size[:, None] * 1_000_000.0
+    logcpm = np.log2(cpm + 1.0)
 
     metadata = pd.DataFrame({
         "Dataset": dataset,
         "sample_id": patients,
-        "patient_key": [f"{dataset}::{patient}" for patient in patients],
         "phase": "infusion",
         "n_cells": n_cells,
         "library_size_common_genes": library_size,
@@ -154,20 +151,13 @@ def main():
     for number, row in enumerate(manifest.itertuples(index=False), start=1):
         path = Path(row.h5ad_path)
         print("\n" + "=" * 100, flush=True)
-        print(
-            f"Dataset {number}/{len(manifest)} | {row.Dataset} | {path.name}",
-            flush=True,
-        )
+        print(f'Dataset {number}/{len(manifest)} | {row.Dataset} | {path.name}', flush=True)
         print("=" * 100, flush=True)
         data = ad.read_h5ad(path, backed="r")
         try:
             frame = accumulate_patients(
-                data,
-                str(row.Dataset),
-                common_genes,
-                args.sample_key,
-                args.count_source,
-                args.block_size,
+                data, str(row.Dataset), common_genes,
+                args.sample_key, args.count_source, args.block_size,
             )
             frames.append(frame)
             print(

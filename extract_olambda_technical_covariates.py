@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-
 FEATURES = [
     "log_n_cells",
     "mean_log1p_total_counts",
@@ -19,21 +18,12 @@ FEATURES = [
 ]
 
 
-def normalized_id(value):
-    return "".join(character for character in str(value).lower() if character.isalnum())
-
-
-def canonical_sample_id(sample_id, dataset):
-    sample_id = str(sample_id).strip()
-    suffix = str(dataset).strip().lower()
-    if normalized_id(sample_id).endswith(normalized_id(suffix)):
-        return sample_id
-    return f"{sample_id}_{suffix}"
-
-
 def matrix_to_memory(matrix):
-    matrix = matrix.to_memory() if hasattr(matrix, "to_memory") else matrix
-    return matrix.tocsr() if sp.issparse(matrix) else np.asarray(matrix)
+    if hasattr(matrix, 'to_memory'):
+        matrix = matrix.to_memory()
+    if sp.issparse(matrix):
+        return matrix.tocsr()
+    return np.asarray(matrix)
 
 
 def count_matrix(adata, layer):
@@ -48,36 +38,34 @@ def cell_metrics(matrix, mitochondrial):
     total_counts = np.asarray(matrix.sum(axis=1)).ravel().astype(float)
     detected_genes = np.asarray((matrix > 0).sum(axis=1)).ravel().astype(float)
     if mitochondrial.any():
-        mitochondrial_counts = np.asarray(matrix[:, mitochondrial].sum(axis=1)).ravel()
+        mito_counts = np.asarray(matrix[:, mitochondrial].sum(axis=1)).ravel()
     else:
-        mitochondrial_counts = np.zeros(len(total_counts), dtype=float)
-    mitochondrial_fraction = np.divide(
-        mitochondrial_counts,
+        mito_counts = np.zeros(len(total_counts), dtype=float)
+    mito_fraction = np.divide(
+        mito_counts,
         total_counts,
         out=np.zeros(len(total_counts), dtype=float),
         where=total_counts > 0,
     )
     return np.column_stack([
         np.log1p(total_counts),
-        mitochondrial_fraction,
+        mito_fraction,
         np.log1p(detected_genes),
     ])
 
 
 def patient_values(metrics, n_cells, graph_nodes, n_particles, rng):
-    central_cell_values = metrics.mean(axis=0)
+    cell_means = metrics.mean(axis=0)
+    # Shared cell weights preserve covariance among the three cell-level metrics
     weights = rng.exponential(size=(n_particles, n_cells))
     weights /= weights.sum(axis=1, keepdims=True)
-    particle_cell_values = weights @ metrics
+    cell_draws = weights @ metrics
 
-    central = np.concatenate([
-        [np.log(n_cells)],
-        central_cell_values,
-        [np.log(graph_nodes)],
-    ])
+    central = np.concatenate([[np.log(n_cells)], cell_means, [np.log(graph_nodes)]])
+    # Cell count and full-graph size are fixed across particles
     particles = np.column_stack([
         np.repeat(np.log(n_cells), n_particles),
-        particle_cell_values,
+        cell_draws,
         np.repeat(np.log(graph_nodes), n_particles),
     ])
     return central, particles
@@ -143,7 +131,8 @@ def main():
     if missing:
         raise ValueError(f"Dataset manifest is missing columns: {sorted(missing)}")
     graph_nodes = full_graph_nodes(args.trajectory_csv)
-    graph_lookup = graph_nodes.set_index(["Dataset", "sample_id"]).graph_nodes.to_dict()
+    graph_lookup = graph_nodes.set_index(['Dataset', 'sample_id']).graph_nodes
+    graph_lookup = graph_lookup.to_dict()
     rng = np.random.default_rng(args.random_state)
 
     central_rows = []
@@ -168,13 +157,9 @@ def main():
                 if len(timepoints) != 1 or timepoints[0] != "infusion":
                     raise ValueError(f"{path} must contain infusion cells only.")
 
-            samples = data.obs[args.sample_key].astype(str).map(
-                lambda value: canonical_sample_id(value, dataset)
-            ).to_numpy()
+            samples = data.obs[args.sample_key].astype(str).to_numpy()
             mitochondrial = np.asarray(
-                data.var_names.astype(str).str.upper().str.startswith(
-                    args.mito_prefix.upper()
-                ),
+                data.var_names.astype(str).str.upper().str.startswith(args.mito_prefix.upper()),
                 dtype=bool,
             )
             if not mitochondrial.any():

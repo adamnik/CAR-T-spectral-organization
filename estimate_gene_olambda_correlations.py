@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -10,42 +9,9 @@ import pandas as pd
 
 
 PSEUDOBULK_METADATA_COLUMNS = [
-    "Dataset",
-    "sample_id",
-    "patient_key",
-    "phase",
-    "n_cells",
+    "Dataset", "sample_id", "phase", "n_cells",
     "library_size_common_genes",
 ]
-
-TREATMENT_CONTRASTS = [
-    ("treatment__axicel_vs_tisacel", "axicel", "tisacel"),
-    ("treatment__Wang_tandem_vs_tisacel", "Tandem", "tisacel"),
-    ("treatment__Freeburg_5M_vs_25M", "Freeburg_IL13Ra2_5M", "Freeburg_IL13Ra2_25M"),
-    ("treatment__Freeburg_10M_vs_25M", "Freeburg_IL13Ra2_10M", "Freeburg_IL13Ra2_25M"),
-]
-
-
-def normalized_identity(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
-
-
-def patient_join_key(sample_id, dataset):
-    identity = normalized_identity(sample_id)
-    dataset = normalized_identity(dataset)
-    if dataset and identity.endswith(dataset) and len(identity) > len(dataset):
-        identity = identity[:-len(dataset)]
-    return identity
-
-
-def add_join_key(frame):
-    frame = frame.copy()
-    frame["_patient_join"] = [
-        patient_join_key(sample, dataset)
-        for sample, dataset in zip(frame.sample_id, frame.Dataset)
-    ]
-    return frame
-
 
 def rank_columns(values):
     return pd.DataFrame(values).rank(axis=0, method="average").to_numpy(float)
@@ -63,23 +29,24 @@ def nuisance_design(metadata, treatment_column):
     audit = []
     if treatment_column is not None:
         treatment = metadata[treatment_column].astype(str)
-        for label, level, reference in TREATMENT_CONTRASTS:
-            datasets = []
-            for dataset_name, group in metadata.groupby("Dataset", observed=True, sort=True):
-                observed = set(group[treatment_column].astype(str))
-                if level in observed and reference in observed:
-                    datasets.append(str(dataset_name))
-            included = bool(datasets)
-            audit.append({
-                "contrast": label,
-                "level": level,
-                "reference": reference,
-                "datasets_with_contrast": "|".join(datasets),
-                "included": included,
-            })
-            if included:
-                arrays.append((dataset.isin(datasets) & treatment.eq(level)).to_numpy(float))
+        for dataset_name, group in metadata.groupby("Dataset", observed=True, sort=True):
+            levels = sorted(group[treatment_column].astype(str).unique())
+            if len(levels) < 2:
+                continue
+            reference = levels[0]
+            for level in levels[1:]:
+                label = f"treatment__{dataset_name}__{level}_vs_{reference}"
+                arrays.append(
+                    (dataset.eq(str(dataset_name)) & treatment.eq(level)).to_numpy(float)
+                )
                 names.append(label)
+                audit.append({
+                    "contrast": label,
+                    "level": level,
+                    "reference": reference,
+                    "datasets_with_contrast": str(dataset_name),
+                    "included": True,
+                })
 
     design = np.column_stack(arrays)
     if np.linalg.matrix_rank(design) != design.shape[1]:
@@ -88,21 +55,22 @@ def nuisance_design(metadata, treatment_column):
 
 
 def weighted_partial_correlations(expression, predictor, design, weights):
-    weighted_design = design * weights[:, None]
-    information = design.T @ weighted_design
-    inverse = np.linalg.inv(information)
+    # Weighted residual correlations, with dataset and treatment removed
+    weighted_X = design * weights[:, None]
+    XtWX = design.T @ weighted_X
+    inv = np.linalg.inv(XtWX)
 
-    design_expression = design.T @ (expression * weights[:, None])
-    expression_ss = np.sum(expression * expression * weights[:, None], axis=0)
-    expression_ss -= np.sum(design_expression * (inverse @ design_expression), axis=0)
+    XtWY = design.T @ (expression * weights[:, None])
+    ss_genes = np.sum(expression * expression * weights[:, None], axis=0)
+    ss_genes -= np.sum(XtWY * (inv @ XtWY), axis=0)
 
-    design_predictor = design.T @ (weights * predictor)
-    predictor_residual = predictor - design @ (inverse @ design_predictor)
-    predictor_ss = np.sum(weights * predictor_residual**2)
-    covariance = predictor_residual @ (expression * weights[:, None])
+    XtWy = design.T @ (weights * predictor)
+    residual_y = predictor - design @ (inv @ XtWy)
+    ss_y = np.sum(weights * residual_y**2)
+    cov = residual_y @ (expression * weights[:, None])
 
-    denominator = np.sqrt(np.maximum(expression_ss * predictor_ss, 1e-20))
-    return covariance / denominator
+    denom = np.sqrt(np.maximum(ss_genes * ss_y, 1e-20))
+    return cov / denom
 
 
 def association_draws(expression, olambda_particles, design, n_draws, random_state):
@@ -114,6 +82,7 @@ def association_draws(expression, olambda_particles, design, n_draws, random_sta
     for draw in range(n_draws):
         particle_index = rng.integers(0, olambda_particles.shape[1], size=n_patients)
         olambda = olambda_particles[np.arange(n_patients), particle_index]
+        # Rank again after selecting this draw's O-lambda particles
         olambda = pd.Series(olambda).rank(method="average").to_numpy(float)
         weights = rng.dirichlet(np.ones(n_patients))
         draws[draw] = weighted_partial_correlations(expression, olambda, design, weights)
@@ -142,49 +111,47 @@ def summarize_associations(genes, draws):
         "signed_direction_probability": 2.0 * probability_positive - 1.0,
         "posterior_standardized_effect": mean / np.maximum(sd, 1e-6),
     })
-    return result.sort_values(
-        ["posterior_standardized_effect", "gene"],
-        ascending=[False, True],
-        kind="mergesort",
-    ).reset_index(drop=True)
+    result = result.sort_values(
+        ['posterior_standardized_effect', 'gene'],
+        ascending=[False, True], kind='mergesort',
+    )
+    return result.reset_index(drop=True)
 
 
 def load_analysis(pseudobulk_path, olambda_path, patient_metadata_path, minimum_cells,
                   treatment_column, drop_missing_treatment=False):
-    pseudobulk = add_join_key(pd.read_csv(pseudobulk_path))
-    olambda = add_join_key(pd.read_csv(olambda_path))
-    patient_metadata = add_join_key(pd.read_csv(patient_metadata_path))
+    pseudobulk = pd.read_csv(pseudobulk_path)
+    olambda = pd.read_csv(olambda_path)
+    patient_metadata = pd.read_csv(patient_metadata_path)
     particle_columns = [column for column in olambda if column.startswith("particle_")]
     if not particle_columns:
         raise ValueError("No particle_* columns were found in the O-lambda file.")
 
     gene_columns = [
         column for column in pseudobulk
-        if column not in PSEUDOBULK_METADATA_COLUMNS and column != "_patient_join"
+        if column not in PSEUDOBULK_METADATA_COLUMNS
     ]
-    metadata_columns = ["Dataset", "sample_id", "_patient_join", "n_cells"]
+    metadata_columns = ["Dataset", "sample_id", "n_cells"]
     analysis = pseudobulk[metadata_columns + gene_columns].merge(
-        olambda[["Dataset", "_patient_join", *particle_columns]],
-        on=["Dataset", "_patient_join"],
+        olambda[["Dataset", "sample_id", *particle_columns]],
+        on=["Dataset", "sample_id"],
         how="inner",
         validate="one_to_one",
     )
-    outcome_columns = ["Dataset", "_patient_join"]
+    outcome_columns = ["Dataset", "sample_id"]
     if treatment_column is not None:
         if treatment_column not in patient_metadata:
             raise KeyError(f"Patient metadata lack treatment column {treatment_column!r}.")
         outcome_columns.append(treatment_column)
     analysis = analysis.merge(
         patient_metadata[outcome_columns],
-        on=["Dataset", "_patient_join"],
+        on=["Dataset", "sample_id"],
         how="left",
         validate="one_to_one",
     )
     analysis = analysis.loc[analysis.n_cells >= minimum_cells].copy()
-    analysis = analysis.sort_values(["Dataset", "_patient_join"]).reset_index(drop=True)
-    excluded_patients = pd.DataFrame(
-        columns=["Dataset", "sample_id", "n_cells", "reason"]
-    )
+    analysis = analysis.sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
+    excluded_patients = pd.DataFrame(columns=['Dataset', 'sample_id', 'n_cells', 'reason'])
     if treatment_column is not None and analysis[treatment_column].isna().any():
         missing_treatment = analysis[treatment_column].isna()
         excluded_patients = analysis.loc[
@@ -198,7 +165,8 @@ def load_analysis(pseudobulk_path, olambda_path, patient_metadata_path, minimum_
             )
         analysis = analysis.loc[~missing_treatment].reset_index(drop=True)
 
-    raw_expression = analysis[gene_columns].apply(pd.to_numeric, errors="raise").to_numpy(float)
+    raw_expression = analysis[gene_columns].apply(pd.to_numeric, errors='raise')
+    raw_expression = raw_expression.to_numpy(float)
     valid = np.isfinite(raw_expression).all(axis=0) & (raw_expression.var(axis=0) > 0)
     excluded_genes = np.asarray(gene_columns, dtype=object)[~valid]
     genes = np.asarray(gene_columns, dtype=object)[valid]
@@ -244,12 +212,8 @@ def main():
 
     treatment_column = None if args.dataset_only else args.treatment_column
     analysis, genes, expression, particles, excluded_genes, excluded_patients = load_analysis(
-        args.pseudobulk_csv,
-        args.olambda_particles_csv,
-        args.patient_metadata_csv,
-        args.minimum_cells,
-        treatment_column,
-        args.drop_missing_treatment,
+        args.pseudobulk_csv, args.olambda_particles_csv, args.patient_metadata_csv,
+        args.minimum_cells, treatment_column, args.drop_missing_treatment,
     )
     design, design_names, treatment_audit = nuisance_design(analysis, treatment_column)
     print(
@@ -259,13 +223,7 @@ def main():
         flush=True,
     )
     print("Nuisance design:", " | ".join(design_names), flush=True)
-    draws = association_draws(
-        expression,
-        particles,
-        design,
-        args.draws,
-        args.random_state,
-    )
+    draws = association_draws(expression, particles, design, args.draws, args.random_state)
     associations = summarize_associations(genes, draws)
     associations["n_patients"] = len(analysis)
     associations["n_datasets"] = analysis.Dataset.nunique()
@@ -280,9 +238,10 @@ def main():
     )
     ranking.to_csv(output_paths["ranking_csv"], index=False)
     ranking.to_csv(output_paths["ranking_rnk"], sep="\t", header=False, index=False)
-    analysis[["Dataset", "sample_id", "n_cells", *( [treatment_column] if treatment_column else [])]].to_csv(
-        output_paths["cohort"], index=False
-    )
+    cohort_columns = ['Dataset', 'sample_id', 'n_cells']
+    if treatment_column:
+        cohort_columns.append(treatment_column)
+    analysis[cohort_columns].to_csv(output_paths['cohort'], index=False)
     treatment_audit.to_csv(output_paths["treatment"], index=False)
     excluded_patients.to_csv(output_paths["excluded"], index=False)
     if args.save_draws:

@@ -1,4 +1,4 @@
-# Shared h5ad output and TCAT column names
+# h5ad output and TCAT names
 
 import re
 
@@ -13,3 +13,11 @@ def write_h5ad(adata, path, overwrite):
 def safe_name(value):
     name = re.sub(r"[^0-9A-Za-z_]+", "_", str(value)).strip("_")
     return name or "unnamed"
+
+
+def feature_kind(feature):
+    if feature.startswith("TCAT_GEP_"):
+        return "GEP"
+    if "_proportion_" in feature:
+        return "cell_type"
+    return "score"

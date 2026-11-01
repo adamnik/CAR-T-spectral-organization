@@ -23,9 +23,8 @@ uniform_depth_subset <- function(frame, maximum) {
   frame <- frame[order(frame$target_depth), , drop = FALSE]
   if (nrow(frame) <= maximum) return(frame)
 
-  target_depths <- seq(
-    min(frame$target_depth), max(frame$target_depth), length.out = maximum
-  )
+  target_depths <- seq(min(frame$target_depth), max(frame$target_depth),
+                       length.out = maximum)
   index <- unique(vapply(
     target_depths,
     function(value) which.min(abs(frame$target_depth - value)),
@@ -36,15 +35,13 @@ uniform_depth_subset <- function(frame, maximum) {
 
 
 thin_by_patient <- function(frame, maximum) {
-  do.call(rbind, lapply(
-    split(frame, frame$patient_key),
-    uniform_depth_subset,
-    maximum = maximum
-  ))
+  do.call(rbind, lapply(split(frame, frame$sample_id),
+                       uniform_depth_subset, maximum = maximum))
 }
 
 
 timescale_grid <- function() {
+  # Equal-probability nodes for the log-timescale prior
   probability <- (seq_len(quadrature_nodes) - 0.5) / quadrature_nodes
   exp(log(2) + log_tau_scale * qt(probability, df = 3))
 }
@@ -69,10 +66,9 @@ fit_population_model <- function(training, tau) {
   frame <- add_basis(training, tau)
   fit <- lme(
     fixed = log_O_minus_one ~ f1 + f2,
-    random = ~ f1 + f2 | patient_key,
+    random = ~ f1 + f2 | sample_id,
     weights = varPower(form = ~ scaled_depth),
-    data = frame,
-    method = "ML",
+    data = frame, method = "ML",
     control = lmeControl(
       opt = "optim", maxIter = 250, msMaxIter = 250,
       tolerance = 1e-7, niterEM = 50, returnObject = TRUE
@@ -95,9 +91,7 @@ fit_population_model <- function(training, tau) {
     fit = fit,
     fixed_effect = fixef(fit)[coefficient_names],
     random_covariance = random_covariance,
-    variance_power = as.numeric(
-      coef(fit$modelStruct$varStruct, unconstrained = FALSE)
-    ),
+    variance_power = as.numeric(coef(fit$modelStruct$varStruct, unconstrained = FALSE)),
     residual_sigma = fit$sigma,
     residual_floor = residual_floor
   )
@@ -105,6 +99,7 @@ fit_population_model <- function(training, tau) {
 
 
 share_asymptote_hierarchy <- function(populations, tau_values) {
+  # Anchor the asymptote hierarchy to the component nearest tau = 2
   baseline <- populations[[which.min(abs(tau_values - 2))]]
   common_mean <- baseline$fixed_effect[1]
   common_variance <- baseline$random_covariance[1, 1]
@@ -130,9 +125,7 @@ share_asymptote_hierarchy <- function(populations, tau_values) {
       c(common_variance, t(shared_slope_alpha)),
       cbind(shared_slope_alpha, shared_slope_covariance)
     )
-    population$random_covariance <- positive_definite(
-      population$random_covariance
-    )
+    population$random_covariance <- positive_definite(population$random_covariance)
     population
   })
 }
@@ -165,14 +158,14 @@ patient_posterior <- function(population, patient_frame, tau) {
   residual_variance <- population$residual_sigma^2 *
     pmax(frame$scaled_depth, 1e-3)^(2 * population$variance_power) +
     population$residual_floor^2
+  # Nested depths are not independent observations
   information_weight <- min(1, effective_points_per_patient / nrow(frame))
   prior <- conditional_slope_prior(population$random_covariance)
 
   objective <- function(random_effect) {
     coefficients <- population$fixed_effect + random_effect
     fitted <- as.vector(design %*% coefficients)
-    standardized_squared <-
-      (frame$log_O_minus_one - fitted)^2 / residual_variance
+    standardized_squared <- (frame$log_O_minus_one - fitted)^2 / residual_variance
     data_loss <- information_weight * sum(
       0.5 * log(residual_variance) +
         0.5 * (residual_student_df + 1) *
@@ -183,8 +176,7 @@ patient_posterior <- function(population, patient_frame, tau) {
     slope_residual <- random_effect[2:3] -
       as.vector(prior$conditional_mean_coefficient * intercept)
     slope_distance <- sum(
-      slope_residual *
-        as.vector(prior$conditional_precision %*% slope_residual)
+      slope_residual * as.vector(prior$conditional_precision %*% slope_residual)
     )
     data_loss +
       0.5 * intercept^2 / prior$intercept_variance +
@@ -243,18 +235,14 @@ fit_patient_components <- function(populations, tau_values, patient_frame) {
 
 sample_asymptote_posterior <- function(fit, simulations, seed) {
   set.seed(seed)
-  component <- sample(
-    seq_along(fit$weights), simulations,
-    replace = TRUE, prob = fit$weights
-  )
+  component <- sample(seq_along(fit$weights), simulations,
+                      replace = TRUE, prob = fit$weights)
   log_excess <- numeric(simulations)
   for (index in seq_along(fit$weights)) {
     selected <- which(component == index)
     if (!length(selected)) next
     posterior <- fit$components[[index]]
-    scale <- sqrt(
-      posterior$scale^2 + calibrated_log_asymptote_floor^2
-    )
+    scale <- sqrt(posterior$scale^2 + calibrated_log_asymptote_floor^2)
     log_excess[selected] <- posterior$location +
       scale * rt(length(selected), df = residual_student_df)
   }
@@ -275,11 +263,9 @@ predict_patient_curve <- function(fit, tau_values, frame) {
 }
 
 
-estimate_patients <- function(
-  populations, tau_values, frame, n_particles, random_state
-) {
+estimate_patients <- function(populations, tau_values, frame, n_particles, random_state) {
   manifest <- unique(
-    frame[, c("Dataset", "sample_id", "patient_key", "n_cells_available")]
+    frame[, c("Dataset", "sample_id", "n_cells_available")]
   )
   manifest <- manifest[order(manifest$Dataset, manifest$sample_id), ]
   probabilities <- (seq_len(n_particles) - 0.5) / n_particles
@@ -288,18 +274,15 @@ estimate_patients <- function(
 
   for (index in seq_len(nrow(manifest))) {
     record <- manifest[index, ]
-    patient <- frame[frame$patient_key == record$patient_key, , drop = FALSE]
+    patient <- frame[frame$sample_id == record$sample_id, , drop = FALSE]
     patient <- patient[order(patient$target_depth), , drop = FALSE]
     fit <- fit_patient_components(populations, tau_values, patient)
     posterior <- sample_asymptote_posterior(
       fit, particle_simulations, 100000L + random_state + index
     )
-    quantiles <- quantile(
-      posterior$O_lambda, c(0.025, 0.50, 0.975), names = FALSE
-    )
-    survival_particles <- quantile(
-      posterior$O_lambda, probabilities, names = FALSE
-    )
+    quantiles <- quantile(posterior$O_lambda, c(0.025, 0.50, 0.975), names = FALSE)
+    # Midpoint quantiles carry the mixture uncertainty into survival models
+    survival_particles <- quantile(posterior$O_lambda, probabilities, names = FALSE)
     central <- sum(
       fit$weights * vapply(fit$components, `[[`, numeric(1), "central")
     )
@@ -431,7 +414,6 @@ read_trajectories <- function(path, minimum_cells) {
     , drop = FALSE
   ]
   if (!nrow(frame)) stop("No eligible trajectory points remain")
-  frame$patient_key <- paste(frame$Dataset, frame$sample_id, sep = "::")
   frame$log_O_minus_one <- log(frame$O_lambda - 1)
   frame
 }
@@ -443,7 +425,7 @@ main <- function() {
   trajectories <- read_trajectories(
     arguments$trajectories_csv, arguments$minimum_cells
   )
-  patients <- length(unique(trajectories$patient_key))
+  patients <- length(unique(trajectories$sample_id))
   cat(sprintf(
     "Fitting %d patients from %d trajectory points\n",
     patients, nrow(trajectories)
