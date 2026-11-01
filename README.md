@@ -85,6 +85,53 @@ python plot_tcat_correlation_matrices.py \
 
 Black markers denote posterior directional probability of at least 0.95 for O-lambda correlations and a 95% credible interval excluding one for survival effects. The matrix order is determined by average-linkage clustering of the posterior-median correlations.
 
+## Regime-conditioned TCAT predictive fields
+
+`analyze_tcat_predictive_field.py` asks whether Bayesian survival regimes organize the TCAT GEP landscape around its clinical-risk field. The graph contains only TCAT GEPs. Its fixed clinical field is the posterior-median vector of continuous GEP log hazard ratios. Three complementary quantities are evaluated:
+
+- prognostic channeling, the covariance projected along the clinical-risk field;
+- signed graph variation, the disagreement between that field and the signed GEP graph;
+- signed-neighbor cosine, the alignment of each GEP with its clinical neighborhood.
+
+The primary geometry removes weighted dataset means within every Bayesian-correlation draw; the global geometry is reported as a sensitivity analysis. Each draw samples one coherent TCAT particle per patient and Bayesian-bootstrap patient weights. High- and low-regime matrices use the posterior regime probabilities saved by the corresponding full Bayesian change-point model. Comparator contexts include every GEP with a 95% interval excluding one in either survival model, together with ASA and Proliferation. An individual contextual GEP is removed from its evaluated graph.
+
+```bash
+python analyze_tcat_predictive_field.py \
+  all_patient_TCAT_particles.npz \
+  results/tcat_individual/individual_results.csv \
+  results/tcat_smooth_regimes/regime_results.csv \
+  results/tcat_smooth_regimes \
+  results/olambda_survival_regimes/patient_regime_probabilities.csv \
+  results/olambda_survival_regimes/model_result.csv \
+  results/tcat_predictive_field
+```
+
+Regime probabilities are permuted within dataset. The script reports each metric, a descriptive joint standardized contrast, observed regime-specific matrices, comparison-wide false-discovery rates, global-geometry sensitivity, and leave-one-dataset-out stability for O-lambda.
+
+## Dataset-cross-fitted clinical fields
+
+`fit_tcat_survival_crossfit.py` refits every independent continuous GEP survival model while holding out one complete dataset. It uses the same priors, interval-censored likelihood, patient particles, and dataset-specific baseline hazards as the primary TCAT analysis. The faster validation defaults are two chains with 1,000 tuning and 1,000 posterior iterations. Fits are checkpointed by held-out dataset and GEP; complete posterior objects are omitted unless `--save-posteriors` is requested.
+
+```bash
+python fit_tcat_survival_crossfit.py \
+  all_patient_TCAT_estimates.csv \
+  all_patient_TCAT_particles.npz \
+  clinical_outcomes.csv \
+  results/tcat_survival_crossfit
+```
+
+`analyze_tcat_predictive_field_crossfit.py` then evaluates each held-out dataset with the GEP clinical field learned from the other datasets. It reports dataset-specific results and an empirical combined test across the held-out folds.
+
+```bash
+python analyze_tcat_predictive_field_crossfit.py \
+  all_patient_TCAT_particles.npz \
+  results/olambda_survival_regimes/patient_regime_probabilities.csv \
+  results/tcat_survival_crossfit/crossfit_feature_results.csv \
+  results/tcat_predictive_field_crossfit
+```
+
+The cross-fitted field is independent of the held-out outcomes. The primary cross-fitted analysis retains the full-cohort O-lambda regime probabilities, so that only the clinical-field transfer—not the regime boundary—is changed across folds.
+
 ## Smooth TCAT survival regimes
 
 `fit_tcat_survival_regimes.py` applies the O-lambda smooth-regime model independently to every TCAT feature. It uses the same outcome-blind Q10-Q90 crossover prior, 0.10-SD logistic transition, uncertainty-particle marginalization, interval-censored likelihood, dataset-specific baseline hazards, and hierarchically pooled dataset effects.

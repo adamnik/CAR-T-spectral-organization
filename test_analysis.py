@@ -25,11 +25,32 @@ import estimate_tcat_correlations as correlations
 import filter_string as string
 import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
+import predictive_field as field
 import run_tcat as tcat
 import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_predictive_field_metrics(self):
+        correlation = np.array([
+            [1., .5, -.5],
+            [.5, 1., -.5],
+            [-.5, -.5, 1.],
+        ])
+        beta = np.array([1., 1., -1.])
+        metrics = field.field_metrics(correlation, beta)
+        self.assertGreater(metrics[0], 1)
+        assert_allclose(metrics[1], 0, atol=1e-14)
+        assert_allclose(metrics[2], 1, atol=1e-14)
+
+        membership = np.array([.1, .2, .8, .9])
+        groups = [np.array([0, 1]), np.array([2, 3])]
+        permuted = field.permute_within_dataset(
+            membership, groups, np.random.default_rng(2)
+        )
+        assert_allclose(np.sort(permuted[:2]), np.sort(membership[:2]))
+        assert_allclose(np.sort(permuted[2:]), np.sort(membership[2:]))
+
     def test_uncertainty_aware_correlations(self):
         values = np.array([
             [0., 0., 3.],
