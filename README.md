@@ -132,6 +132,38 @@ python analyze_tcat_predictive_field_crossfit.py \
 
 The cross-fitted field is independent of the held-out outcomes. The primary cross-fitted analysis retains the full-cohort O-lambda regime probabilities, so that only the clinical-field transfer—not the regime boundary—is changed across folds.
 
+## Pseudobulk gene associations and enrichment
+
+`extract_string_pseudobulk.py` constructs a single comparable gene-expression matrix across cohorts. It takes one processed infusion h5ad per dataset, intersects their canonical STRING gene names, sums counts by patient over that exact gene universe, and calculates log2(CPM + 1).
+
+```bash
+python extract_string_pseudobulk.py \
+  dataset_manifest.csv \
+  results/string_pseudobulk_logCPM.csv
+```
+
+The manifest has columns `Dataset` and `h5ad_path`. The output contains every shared STRING gene in a common order; genes are not selected using their association with O-lambda.
+
+`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset effects together with the corrected treatment contrasts identifiable within datasets.
+
+```bash
+python estimate_gene_olambda_correlations.py \
+  results/string_pseudobulk_logCPM.csv \
+  results/olambda_asymptotes/patient_olambda_particles.csv \
+  patient_metadata_with_treatment.csv \
+  results/olambda_gene_associations
+```
+
+The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
+
+`run_fgsea_rankings.R` runs `fgseaMultilevel` against MSigDB Hallmark and Reactome collections and saves both enrichment results and the exact gene-set membership tables used.
+
+```bash
+Rscript run_fgsea_rankings.R \
+  results/olambda_gene_associations/olambda_gene_GSEA_rank.rnk \
+  results/olambda_gene_associations/fgsea
+```
+
 ## Smooth TCAT survival regimes
 
 `fit_tcat_survival_regimes.py` applies the O-lambda smooth-regime model independently to every TCAT feature. It uses the same outcome-blind Q10-Q90 crossover prior, 0.10-SD logistic transition, uncertainty-particle marginalization, interval-censored likelihood, dataset-specific baseline hazards, and hierarchically pooled dataset effects.

@@ -21,6 +21,8 @@ from scipy.stats import t
 
 import extract_tcat_patient_particles as extraction
 import extract_olambda_sensitivity as sensitivity
+import extract_string_pseudobulk as pseudobulk
+import estimate_gene_olambda_correlations as gene_correlations
 import estimate_tcat_correlations as correlations
 import filter_string as string
 import fit_tcat_survival as tcat_survival
@@ -31,6 +33,51 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_string_pseudobulk_and_gene_correlations(self):
+        counts = np.array([
+            [1., 5., 0.],
+            [2., 4., 0.],
+            [0., 3., 1.],
+            [4., 2., 2.],
+        ])
+        for matrix in [counts, sparse.csr_matrix(counts)]:
+            data = ad.AnnData(
+                matrix,
+                obs=pd.DataFrame({'sample_id': ['p1', 'p1', 'p2', 'p2']}),
+                var=pd.DataFrame(index=['A', 'B', 'C']),
+            )
+            frame = pseudobulk.accumulate_patients(
+                data, 'D', ['A', 'C'], 'sample_id', 'X', 2
+            )
+            expected_counts = np.array([[3., 0.], [4., 3.]])
+            expected = np.log2(
+                expected_counts / expected_counts.sum(axis=1, keepdims=True) * 1e6 + 1
+            )
+            assert_allclose(frame[['A', 'C']], expected)
+            assert_array_equal(frame.n_cells, [2, 2])
+
+        expression = np.array([
+            [1., 6.], [2., 5.], [3., 4.], [4., 3.], [5., 2.], [6., 1.]
+        ])
+        predictor = np.array([1., 2., 3., 4., 5., 6.])
+        design = np.column_stack([np.ones(6), [0., 0., 0., 1., 1., 1.]])
+        weights = np.repeat(1 / 6, 6)
+        actual = gene_correlations.weighted_partial_correlations(
+            expression, predictor, design, weights
+        )
+        inverse = np.linalg.inv(design.T @ (design * weights[:, None]))
+        residual_expression = expression - design @ (
+            inverse @ (design.T @ (expression * weights[:, None]))
+        )
+        residual_predictor = predictor - design @ (
+            inverse @ (design.T @ (weights * predictor))
+        )
+        expected = correlations.weighted_vector_correlations(
+            residual_expression, residual_predictor, weights
+        )
+        assert_allclose(actual, expected)
+        self.assertEqual(gene_correlations.patient_join_key('DC41_bai2024', 'Bai2024'), 'dc41')
+
     def test_predictive_field_metrics(self):
         correlation = np.array([
             [1., .5, -.5],
