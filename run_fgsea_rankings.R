@@ -19,16 +19,16 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 ranking <- fread(ranking_path, header = FALSE, col.names = c("gene", "score"))
 ranking <- ranking[is.finite(score) & !duplicated(gene)]
+setorder(ranking, -score, gene)
 statistics <- ranking$score
 names(statistics) <- ranking$gene
-statistics <- sort(statistics, decreasing = TRUE)
 
 collections <- list(
-    Hallmark = msigdbr(species = "Homo sapiens", category = "H"),
+    Hallmark = msigdbr(species = "Homo sapiens", collection = "H"),
     Reactome = msigdbr(
         species = "Homo sapiens",
-        category = "C2",
-        subcategory = "CP:REACTOME"
+        collection = "C2",
+        subcollection = "CP:REACTOME"
     )
 )
 
@@ -53,12 +53,12 @@ for (collection_name in names(collections)) {
         minSize = min_size,
         maxSize = max_size,
         eps = 0,
-        nPermSimple = 10000,
+        nPermSimple = 100000,
         gseaParam = 1
     ))
     result[, collection := collection_name]
     result[, leadingEdge := vapply(leadingEdge, paste, collapse = "|", FUN.VALUE = character(1))]
-    setorder(result, padj, -abs(NES))
+    result <- result[order(padj, -abs(NES), na.last = TRUE)]
     fwrite(result, file.path(output_dir, paste0("fgsea_", collection_name, ".csv")))
     fwrite(
         membership[, .(collection = collection_name, pathway = gs_name, gene = gene_symbol)],
@@ -70,7 +70,7 @@ for (collection_name in names(collections)) {
 
 combined <- rbindlist(all_results, use.names = TRUE, fill = TRUE)
 combined[, padj_all_collections := p.adjust(pval, method = "BH")]
-setorder(combined, padj, -abs(NES))
+combined <- combined[order(padj, -abs(NES), na.last = TRUE)]
 fwrite(combined, file.path(output_dir, "fgsea_all_collections.csv"))
 fwrite(rbindlist(collection_versions), file.path(output_dir, "fgsea_collection_versions.csv"))
 
