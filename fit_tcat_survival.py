@@ -13,9 +13,11 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from analysis_io import safe_name, feature_kind
+from survival_model import add_adjustment_arguments, adjustment_design, adjustment_parameters
 from survival_model import alignment_summary, baseline_parameters, diagnostics, effect_summary
 from survival_model import hierarchical_parameters, interval_loglikelihood, load_tcat_analysis
-from survival_model import marginalize_particles, model_coordinates, summarize_effects, survival_arrays
+from survival_model import marginalize_particles, model_coordinates, parse_adjustments
+from survival_model import summarize_adjustments, summarize_effects, survival_arrays
 
 
 JOINT_GLOBAL_SCALE = 0.30
@@ -111,17 +113,24 @@ def sample_model(args):
 
 
 def individual_model(feature, feature_index, data, central, particles, particle_weights,
-                     arrays, args, output_dir):
+                     arrays, adjustment_matrix, adjustment_table, args, output_dir):
     center = float(central[:, feature_index].mean())
     scale = float(central[:, feature_index].std(ddof=1))
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError(f"Feature {feature!r} has no patient-level variation.")
     standardized = (particles[:, :, feature_index] - center) / scale
 
-    with pm.Model(coords=model_coordinates(data, arrays)):
+    coords = model_coordinates(data, arrays)
+    if not adjustment_table.empty:
+        coords["adjustment"] = adjustment_table.adjustment.tolist()
+    with pm.Model(coords=coords):
         baseline_log_rate, patient_effect = hierarchical_parameters(arrays)
+        clinical_adjustment = adjustment_parameters(
+            adjustment_matrix, args.adjustment_effect_sd
+        )
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
+            + clinical_adjustment[:, None, None]
             + patient_effect[:, None, None] * pt.as_tensor_variable(standardized)[:, :, None]
         )
         conditional = interval_loglikelihood(hazard, arrays)
@@ -136,6 +145,8 @@ def individual_model(feature, feature_index, data, central, particles, particle_
         "global_effect", "dataset_effect_sd", "dataset_effect",
         "baseline_log_rate_initial", "baseline_smoothness", "baseline_innovation",
     ]
+    if not adjustment_table.empty:
+        variables.append("adjustment_effect")
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     result, dataset_results = summarize_effects(idata, arrays["datasets"])
     result.update(diagnostic_values)
@@ -155,9 +166,12 @@ def individual_model(feature, feature_index, data, central, particles, particle_
 
     pd.DataFrame([result]).to_csv(output_dir / "model_result.csv", index=False)
     dataset_results.to_csv(output_dir / "dataset_effects.csv", index=False)
+    adjustment_results = summarize_adjustments(idata, adjustment_table)
+    adjustment_results.insert(0, "feature", feature)
+    adjustment_results.to_csv(output_dir / "adjustment_effects.csv", index=False)
     posterior_summary.to_csv(output_dir / "posterior_summary.csv")
     idata.to_netcdf(output_dir / "posterior.nc")
-    return result, dataset_results
+    return result, dataset_results, adjustment_results
 
 
 def summarize_joint(idata, features, datasets, mode):
@@ -187,7 +201,7 @@ def summarize_joint(idata, features, datasets, mode):
 
 
 def joint_model(mode, data, central, particles, particle_weights, feature_names,
-                arrays, args, output_dir):
+                arrays, adjustment_matrix, adjustment_table, args, output_dir):
     selected, blocks = joint_features(feature_names, mode)
     feature_lookup = {feature: index for index, feature in enumerate(feature_names)}
     indices = np.asarray([feature_lookup[feature] for feature in selected])
@@ -197,8 +211,13 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
 
     coords = model_coordinates(data, arrays)
     coords["feature"] = selected
+    if not adjustment_table.empty:
+        coords["adjustment"] = adjustment_table.adjustment.tolist()
     with pm.Model(coords=coords):
         baseline_log_rate = baseline_parameters(arrays)
+        clinical_adjustment = adjustment_parameters(
+            adjustment_matrix, args.adjustment_effect_sd
+        )
         global_scale = pm.HalfNormal("joint_global_scale", JOINT_GLOBAL_SCALE)
         global_raw = pm.Normal("joint_global_raw", 0.0, 1.0, dims="feature")
         global_effect = pm.Deterministic(
@@ -219,7 +238,11 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
             pt.as_tensor_variable(standardized) * patient_effect[:, None, :],
             axis=2,
         )
-        hazard = pt.exp(baseline_log_rate[:, None, :] + linear_predictor[:, :, None])
+        hazard = pt.exp(
+            baseline_log_rate[:, None, :]
+            + clinical_adjustment[:, None, None]
+            + linear_predictor[:, :, None]
+        )
         conditional = interval_loglikelihood(hazard, arrays)
         patient_loglikelihood = marginalize_particles(conditional, particle_weights)
         pm.Deterministic("patient_loglikelihood", patient_loglikelihood, dims="observation")
@@ -233,6 +256,8 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
         "joint_dataset_effect", "baseline_log_rate_initial", "baseline_smoothness",
         "baseline_innovation",
     ]
+    if not adjustment_table.empty:
+        variables.append("adjustment_effect")
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     feature_results, dataset_results = summarize_joint(idata, selected, arrays["datasets"], mode)
     for key, value in diagnostic_values.items():
@@ -245,6 +270,9 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
 
     feature_results.to_csv(output_dir / "joint_feature_results.csv", index=False)
     dataset_results.to_csv(output_dir / "joint_dataset_effects.csv", index=False)
+    summarize_adjustments(idata, adjustment_table).to_csv(
+        output_dir / "adjustment_effects.csv", index=False
+    )
     posterior_summary.to_csv(output_dir / "posterior_summary.csv")
     idata.to_netcdf(output_dir / "posterior.nc")
     manifest = {
@@ -255,6 +283,8 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
         "coefficient_constraint": "sum to zero within each CLR composition block",
         "global_shrinkage_prior": f"HalfNormal({JOINT_GLOBAL_SCALE})",
         "dataset_deviation_prior": f"HalfNormal({JOINT_DATASET_SCALE})",
+        "adjustments": parse_adjustments(args.adjustment),
+        "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
     }
     (output_dir / "joint_manifest.json").write_text(json.dumps(manifest, indent=2))
     return feature_results, dataset_results
@@ -278,13 +308,17 @@ def main():
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
+    add_adjustment_arguments(parser)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    adjustments = parse_adjustments(args.adjustment)
 
     data, central, particles, particle_weights, feature_names = load_tcat_analysis(
-        args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells
+        args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells,
+        adjustment_columns=adjustments,
     )
     arrays = survival_arrays(data)
+    adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
     data.to_csv(args.output_dir / "analysis_cohort.csv", index=False)
     print(
         f"Analysis cohort: {len(data):,} patients | {int(data.event_observed.sum()):,} events | "
@@ -300,24 +334,35 @@ def main():
         lookup = {feature: index for index, feature in enumerate(feature_names)}
         results = []
         dataset_results = []
+        adjustment_results = []
         errors = []
         print(f"Fitting {len(selected):,} independent TCAT models", flush=True)
         for number, feature in enumerate(selected, start=1):
             feature_dir = args.output_dir / "individual" / f"{lookup[feature]:03d}_{safe_name(feature)}"
             feature_dir.mkdir(parents=True, exist_ok=True)
             result_path = feature_dir / "model_result.csv"
+            adjustment_path = feature_dir / "adjustment_effects.csv"
             print("\n" + "=" * 100, flush=True)
             print(f"[{number}/{len(selected)}] {feature} ({feature_kind(feature)})", flush=True)
             print("=" * 100, flush=True)
-            if result_path.exists() and not args.overwrite:
+            can_resume = (
+                result_path.exists()
+                and not args.overwrite
+                and (not adjustments or adjustment_path.exists())
+            )
+            if can_resume:
                 result = pd.read_csv(result_path).iloc[0].to_dict()
                 datasets = pd.read_csv(feature_dir / "dataset_effects.csv")
+                if adjustment_path.exists():
+                    adjustments_for_feature = pd.read_csv(adjustment_path)
+                else:
+                    adjustments_for_feature = pd.DataFrame(columns=["feature"])
                 print("RESUME: existing completed model", flush=True)
             else:
                 try:
-                    result, datasets = individual_model(
+                    result, datasets, adjustments_for_feature = individual_model(
                         feature, lookup[feature], data, central, particles, particle_weights,
-                        arrays, args, feature_dir,
+                        arrays, adjustment_matrix, adjustment_table, args, feature_dir,
                     )
                 except Exception as error:
                     errors.append({
@@ -331,6 +376,7 @@ def main():
                     continue
             results.append(result)
             dataset_results.append(datasets)
+            adjustment_results.append(adjustments_for_feature)
             print(
                 f"HR={result['HR_median']:.3f} "
                 f"[{result['HR_q025']:.3f}, {result['HR_q975']:.3f}] | "
@@ -342,19 +388,28 @@ def main():
             pd.concat(dataset_results, ignore_index=True).to_csv(
                 args.output_dir / "individual_dataset_effects.csv", index=False
             )
+            pd.concat(adjustment_results, ignore_index=True).to_csv(
+                args.output_dir / "individual_adjustment_effects.csv", index=False
+            )
         if errors:
             print(f"Completed with {len(errors):,} model errors; see individual_errors.csv", flush=True)
     else:
         output_dir = args.output_dir / args.mode
         output_dir.mkdir(parents=True, exist_ok=True)
         result_path = output_dir / "joint_feature_results.csv"
-        if result_path.exists() and not args.overwrite:
+        adjustment_path = output_dir / "adjustment_effects.csv"
+        can_resume = (
+            result_path.exists()
+            and not args.overwrite
+            and (not adjustments or adjustment_path.exists())
+        )
+        if can_resume:
             print(f"RESUME: existing completed {args.mode} model", flush=True)
             feature_results = pd.read_csv(result_path)
         else:
             feature_results, _ = joint_model(
                 args.mode, data, central, particles, particle_weights,
-                feature_names, arrays, args, output_dir,
+                feature_names, arrays, adjustment_matrix, adjustment_table, args, output_dir,
             )
         print("\nJoint posterior feature effects:", flush=True)
         print(
@@ -372,6 +427,8 @@ def main():
         "random_state": args.random_state,
         "particle_definition": "patient cell-level Bayesian bootstrap",
         "uncertainty_integration": "likelihood marginalized across coherent patient particles",
+        "adjustments": adjustments,
+        "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
     }
     (args.output_dir / f"{args.mode}_run_manifest.json").write_text(json.dumps(run_manifest, indent=2))
 

@@ -18,10 +18,105 @@ DATASET_EFFECT_SD = 0.40
 BASELINE_RATE_MEDIAN = 0.05
 BASELINE_LOG_RATE_SD = 1.00
 BASELINE_SMOOTHNESS_SD = 0.30
+ADJUSTMENT_EFFECT_SD = 0.35
+
+
+def add_adjustment_arguments(parser):
+    parser.add_argument(
+        "--adjustment",
+        action="append",
+        default=[],
+        metavar="COLUMN=REFERENCE",
+        help=(
+            "Categorical clinical adjustment and its reference level. "
+            "Repeat for multiple adjustments."
+        ),
+    )
+    parser.add_argument(
+        "--adjustment-effect-sd",
+        type=float,
+        default=ADJUSTMENT_EFFECT_SD,
+        help="Normal prior SD for global clinical adjustment coefficients.",
+    )
+
+
+def parse_adjustments(specifications):
+    adjustments = {}
+    for specification in specifications:
+        if "=" not in specification:
+            raise ValueError(
+                f"Adjustment {specification!r} must have the form COLUMN=REFERENCE."
+            )
+        column, reference = [value.strip() for value in specification.split("=", 1)]
+        if not column or not reference:
+            raise ValueError(
+                f"Adjustment {specification!r} must have the form COLUMN=REFERENCE."
+            )
+        if column in adjustments:
+            raise ValueError(f"Adjustment column {column!r} was specified more than once.")
+        adjustments[column] = reference
+    return adjustments
+
+
+def adjustment_design(data, adjustments):
+    """Dummy-code categorical clinical adjustments using explicit references."""
+    columns = []
+    rows = []
+    for column, reference in adjustments.items():
+        if column not in data.columns:
+            raise ValueError(f"Clinical outcomes are missing adjustment column {column!r}.")
+        observed = data[column].astype(str)
+        levels = sorted(observed.unique())
+        if reference not in levels:
+            raise ValueError(
+                f"Reference {reference!r} is absent from adjustment column {column!r}; "
+                f"observed levels are {levels}."
+            )
+        for level in levels:
+            if level == reference:
+                continue
+            columns.append(observed.eq(level).to_numpy(float))
+            rows.append(
+                {
+                    "adjustment": f"{column}: {level} vs {reference}",
+                    "column": column,
+                    "level": level,
+                    "reference": reference,
+                    "patients_at_level": int(observed.eq(level).sum()),
+                    "patients_at_reference": int(observed.eq(reference).sum()),
+                }
+            )
+    matrix = np.column_stack(columns) if columns else np.empty((len(data), 0), dtype=float)
+    table_columns = [
+        "adjustment", "column", "level", "reference",
+        "patients_at_level", "patients_at_reference",
+    ]
+    return matrix, pd.DataFrame(rows, columns=table_columns)
+
+
+def adjustment_parameters(matrix, effect_sd):
+    if effect_sd <= 0:
+        raise ValueError("--adjustment-effect-sd must be positive.")
+    if matrix.shape[1] == 0:
+        return pt.zeros(matrix.shape[0])
+    effect = pm.Normal("adjustment_effect", 0.0, effect_sd, dims="adjustment")
+    return pt.dot(pt.as_tensor_variable(matrix), effect)
+
+
+def summarize_adjustments(idata, adjustment_table):
+    if adjustment_table.empty:
+        return adjustment_table.copy()
+    effects = idata.posterior.adjustment_effect.stack(sample=("chain", "draw"))
+    effects = effects.transpose("sample", "adjustment").values
+    rows = []
+    for index, metadata in adjustment_table.reset_index(drop=True).iterrows():
+        rows.append({**metadata.to_dict(), **effect_summary(effects[:, index])})
+    return pd.DataFrame(rows)
 
 
 def load_olambda_analysis(
-    asymptote_path, outcome_path, minimum_cells, n_particles, particles_path=None
+    asymptote_path, outcome_path, minimum_cells, n_particles,
+    particles_path=None, adjustment_columns=None,
 ):
     asymptotes = pd.read_csv(asymptote_path)
     outcomes = pd.read_csv(outcome_path)
@@ -29,7 +124,13 @@ def load_olambda_analysis(
         outcomes = outcomes.rename(columns={"event": "event_observed"})
 
     # Match patients across the two tables
-    outcome_columns = ['Dataset', 'sample_id', 'event_observed', 't_start', 't_end']
+    adjustment_columns = list(adjustment_columns or [])
+    outcome_columns = [
+        'Dataset', 'sample_id', 'event_observed', 't_start', 't_end', *adjustment_columns,
+    ]
+    missing = sorted(set(outcome_columns).difference(outcomes.columns))
+    if missing:
+        raise ValueError(f"Clinical outcomes are missing columns: {missing}")
     data = asymptotes.merge(
         outcomes[outcome_columns],
         on=["Dataset", "sample_id"],
@@ -53,6 +154,17 @@ def load_olambda_analysis(
         data[column] = pd.to_numeric(data[column], errors="coerce")
     # Keep the analysis cohort
     data = data.dropna(subset=numeric_columns).copy()
+    if adjustment_columns:
+        complete = data[adjustment_columns].notna().all(axis=1)
+        for column in adjustment_columns:
+            complete &= data[column].astype(str).str.strip().ne("")
+        excluded = int((~complete).sum())
+        if excluded:
+            print(
+                f"Excluding {excluded:,} patients with missing requested clinical adjustments.",
+                flush=True,
+            )
+        data = data.loc[complete].copy()
     keep = (
         (data.n_cells_available >= minimum_cells)
         & data.event_observed.isin([0, 1])
@@ -120,7 +232,8 @@ def load_olambda_analysis(
     return data, raw_particles, standardized_particles, particle_weights, scaling
 
 
-def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cells):
+def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cells,
+                       adjustment_columns=None):
     """Match patient TCAT particles, central estimates, and survival outcomes."""
     estimates = pd.read_csv(estimates_path)
     outcomes = pd.read_csv(outcome_path)
@@ -147,7 +260,13 @@ def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cel
         how="inner",
         validate="one_to_one",
     )
-    outcome_columns = ["Dataset", "sample_id", "event_observed", "t_start", "t_end"]
+    adjustment_columns = list(adjustment_columns or [])
+    outcome_columns = [
+        "Dataset", "sample_id", "event_observed", "t_start", "t_end", *adjustment_columns,
+    ]
+    missing = sorted(set(outcome_columns).difference(outcomes.columns))
+    if missing:
+        raise ValueError(f"Clinical outcomes are missing columns: {missing}")
     data = data.merge(
         outcomes[outcome_columns],
         on=["Dataset", "sample_id"],
@@ -159,6 +278,17 @@ def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cel
     for column in numeric_columns:
         data[column] = pd.to_numeric(data[column], errors="coerce")
     data = data.dropna(subset=numeric_columns).copy()
+    if adjustment_columns:
+        complete = data[adjustment_columns].notna().all(axis=1)
+        for column in adjustment_columns:
+            complete &= data[column].astype(str).str.strip().ne("")
+        excluded = int((~complete).sum())
+        if excluded:
+            print(
+                f"Excluding {excluded:,} patients with missing requested clinical adjustments.",
+                flush=True,
+            )
+        data = data.loc[complete].copy()
     keep = (
         (data.n_cells >= minimum_cells)
         & data.event_observed.isin([0, 1])

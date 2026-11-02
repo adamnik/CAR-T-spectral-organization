@@ -13,13 +13,15 @@ import pytensor.tensor as pt
 
 from analysis_io import safe_name
 from fit_tcat_survival import feature_kind, individual_features, sample_model
+from survival_model import add_adjustment_arguments, adjustment_design, adjustment_parameters
 from survival_model import diagnostics, hierarchical_parameters, interval_loglikelihood
 from survival_model import load_tcat_analysis, marginalize_particles, model_coordinates
+from survival_model import parse_adjustments, summarize_adjustments
 from survival_model import summarize_effects, survival_arrays
 
 
 def regime_model(feature, feature_index, data, central, particles, particle_weights,
-                 arrays, args, output_dir):
+                 arrays, adjustment_matrix, adjustment_table, args, output_dir):
     values = central[:, feature_index]
     center = float(values.mean())
     scale = float(values.std(ddof=1))
@@ -32,8 +34,14 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
     if crossover_high <= crossover_low:
         raise ValueError(f"Feature {feature!r} has no variation across its crossover prior.")
 
-    with pm.Model(coords=model_coordinates(data, arrays)):
+    coords = model_coordinates(data, arrays)
+    if not adjustment_table.empty:
+        coords["adjustment"] = adjustment_table.adjustment.tolist()
+    with pm.Model(coords=coords):
         baseline_log_rate, patient_effect = hierarchical_parameters(arrays)
+        clinical_adjustment = adjustment_parameters(
+            adjustment_matrix, args.adjustment_effect_sd
+        )
         crossover = pm.Uniform("crossover", crossover_low, crossover_high)
         standardized_crossover = (crossover - center) / scale
         distance = pt.as_tensor_variable(standardized) - standardized_crossover
@@ -45,6 +53,7 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
         )
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
+            + clinical_adjustment[:, None, None]
             + patient_effect[:, None, None] * activation[:, :, None]
         )
         conditional = interval_loglikelihood(hazard, arrays)
@@ -59,6 +68,8 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
         "global_effect", "dataset_effect_sd", "dataset_effect", "crossover",
         "baseline_log_rate_initial", "baseline_smoothness", "baseline_innovation",
     ]
+    if not adjustment_table.empty:
+        variables.append("adjustment_effect")
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     result, dataset_results = summarize_effects(idata, arrays["datasets"])
     crossover_draws = np.asarray(idata.posterior.crossover).reshape(-1)
@@ -98,6 +109,9 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
 
     pd.DataFrame([result]).to_csv(output_dir / "model_result.csv", index=False)
     dataset_results.to_csv(output_dir / "dataset_effects.csv", index=False)
+    adjustment_results = summarize_adjustments(idata, adjustment_table)
+    adjustment_results.insert(0, "feature", feature)
+    adjustment_results.to_csv(output_dir / "adjustment_effects.csv", index=False)
     membership_results.to_csv(output_dir / "patient_regime_probabilities.csv", index=False)
     posterior_summary.to_csv(output_dir / "posterior_summary.csv")
     idata.to_netcdf(output_dir / "posterior.nc")
@@ -115,9 +129,11 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
             "upper": crossover_high,
         },
         "transition_scale_sd": args.transition_scale_sd,
+        "adjustments": parse_adjustments(args.adjustment),
+        "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
     }
     (output_dir / "model_manifest.json").write_text(json.dumps(manifest, indent=2))
-    return result, dataset_results
+    return result, dataset_results, adjustment_results
 
 
 def main():
@@ -143,17 +159,21 @@ def main():
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
+    add_adjustment_arguments(parser)
     args = parser.parse_args()
     if not 0 <= args.crossover_quantile_low < args.crossover_quantile_high <= 1:
         raise ValueError("Crossover quantiles must satisfy 0 <= low < high <= 1.")
     if args.transition_scale_sd <= 0:
         raise ValueError("--transition-scale-sd must be positive.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    adjustments = parse_adjustments(args.adjustment)
 
     data, central, particles, particle_weights, feature_names = load_tcat_analysis(
-        args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells
+        args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells,
+        adjustment_columns=adjustments,
     )
     arrays = survival_arrays(data)
+    adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
     selected = individual_features(
         feature_names, args.feature, args.feature_kind, args.maximum_features
     )
@@ -174,23 +194,34 @@ def main():
 
     results = []
     dataset_results = []
+    adjustment_results = []
     errors = []
     for number, feature in enumerate(selected, start=1):
         feature_dir = args.output_dir / "individual" / f"{lookup[feature]:03d}_{safe_name(feature)}"
         feature_dir.mkdir(parents=True, exist_ok=True)
         result_path = feature_dir / "model_result.csv"
+        adjustment_path = feature_dir / "adjustment_effects.csv"
         print("\n" + "=" * 100, flush=True)
         print(f"[{number}/{len(selected)}] {feature} ({feature_kind(feature)})", flush=True)
         print("=" * 100, flush=True)
-        if result_path.exists() and not args.overwrite:
+        can_resume = (
+            result_path.exists()
+            and not args.overwrite
+            and (not adjustments or adjustment_path.exists())
+        )
+        if can_resume:
             result = pd.read_csv(result_path).iloc[0].to_dict()
             datasets = pd.read_csv(feature_dir / "dataset_effects.csv")
+            if adjustment_path.exists():
+                adjustments_for_feature = pd.read_csv(adjustment_path)
+            else:
+                adjustments_for_feature = pd.DataFrame(columns=["feature"])
             print("RESUME: existing completed model", flush=True)
         else:
             try:
-                result, datasets = regime_model(
+                result, datasets, adjustments_for_feature = regime_model(
                     feature, lookup[feature], data, central, particles, particle_weights,
-                    arrays, args, feature_dir,
+                    arrays, adjustment_matrix, adjustment_table, args, feature_dir,
                 )
             except Exception as error:
                 errors.append({
@@ -204,6 +235,7 @@ def main():
                 continue
         results.append(result)
         dataset_results.append(datasets)
+        adjustment_results.append(adjustments_for_feature)
         print(
             f"HR={result['HR_median']:.3f} "
             f"[{result['HR_q025']:.3f}, {result['HR_q975']:.3f}] | "
@@ -215,6 +247,9 @@ def main():
         pd.DataFrame(results).to_csv(args.output_dir / "regime_results.csv", index=False)
         pd.concat(dataset_results, ignore_index=True).to_csv(
             args.output_dir / "regime_dataset_effects.csv", index=False
+        )
+        pd.concat(adjustment_results, ignore_index=True).to_csv(
+            args.output_dir / "regime_adjustment_effects.csv", index=False
         )
 
     run_manifest = {
@@ -230,6 +265,8 @@ def main():
         "chains": args.chains,
         "target_accept": args.target_accept,
         "random_state": args.random_state,
+        "adjustments": adjustments,
+        "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
     }
     (args.output_dir / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2))
     if results:

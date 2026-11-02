@@ -11,7 +11,8 @@ import pytensor.tensor as pt
 
 from survival_model import load_olambda_analysis, survival_arrays, model_coordinates
 from survival_model import hierarchical_parameters, interval_loglikelihood, marginalize_particles
-from survival_model import summarize_effects, diagnostics
+from survival_model import adjustment_design, adjustment_parameters, add_adjustment_arguments
+from survival_model import diagnostics, parse_adjustments, summarize_adjustments, summarize_effects
 
 
 def main():
@@ -30,16 +31,20 @@ def main():
     parser.add_argument("--cores", type=int, default=4)
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
+    add_adjustment_arguments(parser)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    adjustments = parse_adjustments(args.adjustment)
 
     # Read patient estimates and clinical outcomes
     data, _, particles, particle_weights, scaling = load_olambda_analysis(
         args.asymptotes_csv, args.outcomes_csv,
         minimum_cells=args.minimum_cells, n_particles=args.n_particles,
         particles_path=args.particles_csv,
+        adjustment_columns=adjustments,
     )
     arrays = survival_arrays(data)
+    adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
     print(
         f"Analysis cohort: {len(data):,} patients | "
         f"{int(data.event_observed.sum()):,} events | "
@@ -48,10 +53,17 @@ def main():
     )
 
     # Survival model
-    with pm.Model(coords=model_coordinates(data, arrays)):
+    coords = model_coordinates(data, arrays)
+    if not adjustment_table.empty:
+        coords["adjustment"] = adjustment_table.adjustment.tolist()
+    with pm.Model(coords=coords):
         baseline_log_rate, patient_effect = hierarchical_parameters(arrays)
+        clinical_adjustment = adjustment_parameters(
+            adjustment_matrix, args.adjustment_effect_sd
+        )
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
+            + clinical_adjustment[:, None, None]
             + patient_effect[:, None, None] * pt.as_tensor_variable(particles)[:, :, None]
         )
         conditional_loglikelihood = interval_loglikelihood(hazard, arrays)
@@ -78,6 +90,8 @@ def main():
         "baseline_smoothness",
         "baseline_innovation",
     ]
+    if not adjustment_table.empty:
+        variables.append("adjustment_effect")
     posterior_summary, diagnostic_values = diagnostics(idata, variables)
     result, dataset_results = summarize_effects(idata, arrays["datasets"])
     result.update(diagnostic_values)
@@ -95,6 +109,9 @@ def main():
     data.to_csv(args.output_dir / 'analysis_cohort.csv', index=False)
     pd.DataFrame([result]).to_csv(args.output_dir / 'model_result.csv', index=False)
     dataset_results.to_csv(args.output_dir / 'dataset_effects.csv', index=False)
+    summarize_adjustments(idata, adjustment_table).to_csv(
+        args.output_dir / "adjustment_effects.csv", index=False
+    )
     posterior_summary.to_csv(args.output_dir / "posterior_summary.csv")
     idata.to_netcdf(args.output_dir / "posterior.nc")
     manifest = {
@@ -108,6 +125,8 @@ def main():
         'chains': args.chains,
         'target_accept': args.target_accept,
         'random_state': args.random_state,
+        'adjustments': adjustments,
+        'adjustment_effect_prior': f'Normal(0, {args.adjustment_effect_sd})',
     }
     (args.output_dir / 'run_manifest.json').write_text(json.dumps(manifest, indent=2))
     print(pd.DataFrame([result]).to_string(index=False), flush=True)

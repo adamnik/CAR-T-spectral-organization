@@ -38,7 +38,9 @@ python fit_tcat_survival.py \
   all_patient_TCAT_particles.npz \
   clinical_outcomes.csv \
   results/tcat_individual \
-  --mode individual
+  --mode individual \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
 
 python fit_tcat_survival.py \
   all_patient_TCAT_estimates.csv \
@@ -117,7 +119,9 @@ python fit_tcat_survival_crossfit.py \
   all_patient_TCAT_estimates.csv \
   all_patient_TCAT_particles.npz \
   clinical_outcomes.csv \
-  results/tcat_survival_crossfit
+  results/tcat_survival_crossfit \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
 ```
 
 `analyze_tcat_predictive_field_crossfit.py` then evaluates each held-out dataset with the GEP clinical field learned from the other datasets. It reports dataset-specific results and an empirical combined test across the held-out folds.
@@ -175,7 +179,9 @@ python fit_tcat_survival_regimes.py \
   all_patient_TCAT_estimates.csv \
   all_patient_TCAT_particles.npz \
   clinical_outcomes.csv \
-  results/tcat_smooth_regimes
+  results/tcat_smooth_regimes \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
 ```
 
 Completed feature models are checkpointed independently. The combined results record the high-versus-low plateau hazard ratio, dataset-direction agreement, and the posterior crossover in both native CLR units and as a percentile of the observed patient distribution. These models are intended as a secondary nonlinear comparison with the O-lambda regime rather than a replacement for the primary continuous TCAT models.
@@ -280,7 +286,9 @@ python fit_olambda_survival_continuous.py \
   results/olambda_asymptotes/patient_olambda_asymptotes.csv \
   clinical_outcomes.csv \
   results/olambda_survival_continuous \
-  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv
+  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
 ```
 
 ## Smooth survival regimes
@@ -292,12 +300,16 @@ python fit_olambda_survival_regimes.py \
   results/olambda_asymptotes/patient_olambda_asymptotes.csv \
   clinical_outcomes.csv \
   results/olambda_survival_regimes \
-  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv
+  --particles-csv results/olambda_asymptotes/patient_olambda_particles.csv \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
 ```
 
 Both survival scripts use 16 posterior particles by default. This was the lowest evaluated resolution that reproduced the continuous hazard ratio, regime hazard ratio, and crossover estimate obtained with 21 and 64 particles.
 
 Clinical outcomes must contain `Dataset`, `sample_id`, `event_observed` (or `event`), `t_start`, and `t_end`. Times are measured in months. An event with equal `t_start` and `t_end` is treated as exactly observed; an event with unequal bounds is interval censored; and a row with `event_observed = 0` is right censored at `t_end`.
+
+All survival scripts accept repeated `--adjustment COLUMN=REFERENCE` arguments. Each requested categorical variable is represented by global nuisance coefficients with a `Normal(0, 0.35)` prior by default; use `--adjustment-effect-sd` to change that scale. Patients missing a requested adjustment are excluded, and posterior adjustment effects are written separately from the primary predictor results. Adjustment labels and reference levels are supplied by the analysis rather than hard-coded in the repository. Dataset-confounded adjustment coefficients should be treated as control terms rather than independently interpretable effects.
 
 
 ## Scientific checks and reproducibility

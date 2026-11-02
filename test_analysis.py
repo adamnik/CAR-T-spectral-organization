@@ -299,11 +299,14 @@ class AnalysisChecks(unittest.TestCase):
         outcomes['event'] = [0, 1, 1]
         outcomes['t_start'] = [0., 3., 1.]
         outcomes['t_end'] = [12., 6., 2.]
+        outcomes['Treatment'] = ['tisa', 'axi', 'axi']
         with tempfile.TemporaryDirectory() as directory:
             first, second = Path(directory) / 'estimates.csv', Path(directory) / 'outcomes.csv'
             estimates.to_csv(first, index=False)
             outcomes.to_csv(second, index=False)
-            data, raw, standardized, weights, _ = survival.load_olambda_analysis(first, second, 1000, 16)
+            data, raw, standardized, weights, _ = survival.load_olambda_analysis(
+                first, second, 1000, 16, adjustment_columns=['Treatment']
+            )
         self.assertEqual(list(data.sample_id), ['p2', 'p3'])
         offsets = t.ppf((np.arange(16) + .5) / 16, df=4)
         location = np.array([0., np.log(2)])[:, None]
@@ -344,6 +347,33 @@ class AnalysisChecks(unittest.TestCase):
         assert_allclose(standardized, (raw - 2.5) / np.std([2., 3.], ddof=1))
         assert_allclose(weights.sum(axis=1), 1.)
         self.assertEqual(scaling['particle_source'], str(particles_path))
+
+    def test_clinical_adjustments(self):
+        specifications = survival.parse_adjustments([
+            'Treatment=axi', 'Disease=lymphoma',
+        ])
+        self.assertEqual(specifications, {'Treatment': 'axi', 'Disease': 'lymphoma'})
+        data = pd.DataFrame({
+            'Treatment': ['axi', 'tisa', 'tandem', 'axi'],
+            'Disease': ['lymphoma', 'lymphoma', 'lymphoma', 'leukemia'],
+        })
+        matrix, table = survival.adjustment_design(data, specifications)
+        self.assertEqual(
+            list(table.adjustment),
+            [
+                'Treatment: tandem vs axi',
+                'Treatment: tisa vs axi',
+                'Disease: leukemia vs lymphoma',
+            ],
+        )
+        assert_array_equal(
+            matrix,
+            [[0, 0, 0], [0, 1, 0], [1, 0, 0], [0, 0, 1]],
+        )
+        with self.assertRaises(ValueError):
+            survival.parse_adjustments(['Treatment'])
+        with self.assertRaises(ValueError):
+            survival.adjustment_design(data, {'Treatment': 'missing'})
 
     def test_effect_summaries(self):
         global_effect = np.array([[-.2, .1, .3, .5]])
@@ -432,6 +462,14 @@ class AnalysisChecks(unittest.TestCase):
             baseline, effect = survival.hierarchical_parameters(arrays)
             self.assertEqual(baseline.eval().shape, (3, 10))
             self.assertEqual(effect.eval().shape, (3,))
+            self.assertTrue(np.isfinite(model.compile_logp()(model.initial_point())))
+
+        adjustment_matrix = np.asarray([[0.], [1.], [0.]])
+        coords = survival.model_coordinates(data, arrays)
+        coords['adjustment'] = ['Treatment: tisa vs axi']
+        with pm.Model(coords=coords) as model:
+            adjustment = survival.adjustment_parameters(adjustment_matrix, .35)
+            self.assertEqual(adjustment.eval().shape, (3,))
             self.assertTrue(np.isfinite(model.compile_logp()(model.initial_point())))
 
 
