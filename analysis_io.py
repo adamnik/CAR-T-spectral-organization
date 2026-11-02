@@ -16,6 +16,8 @@ def safe_name(value):
 
 
 def feature_kind(feature):
+    if feature == "O_lambda_inf":
+        return "spectral"
     if feature.startswith("TCAT_GEP_"):
         return "GEP"
     if "_proportion_" in feature:

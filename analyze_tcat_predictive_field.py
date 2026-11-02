@@ -183,7 +183,8 @@ def context_test(states, bootstrap_weights, membership, beta, graph_indices,
 
 
 def olambda_leave_one_dataset_out(states, bootstrap_weights, membership, beta,
-                                  datasets, permutations, random_state):
+                                  datasets, permutations, random_state,
+                                  checkpoint_path=None):
     rows = []
     unique_datasets = sorted(np.unique(datasets))
     for number, omitted in enumerate(unique_datasets, start=1):
@@ -219,6 +220,8 @@ def olambda_leave_one_dataset_out(states, bootstrap_weights, membership, beta,
             row[f"z__{metric}"] = z[index]
             row[f"p__{metric}"] = p[index]
         rows.append(row)
+        if checkpoint_path is not None:
+            pd.DataFrame(rows).to_csv(checkpoint_path, index=False)
         print(
             f"LODO {number}/{len(unique_datasets)} | omitted {omitted} | "
             f"joint z={joint_z:.2f}, p={joint_p:.4g}", flush=True
@@ -269,8 +272,20 @@ def main():
 
     context_rows = []
     null_rows = []
+    result_path = args.output_dir / "predictive_field_context_results.csv"
     matrix_dir = args.output_dir / "observed_matrices"
     matrix_dir.mkdir(exist_ok=True)
+    null_dir = args.output_dir / "permutation_null_parts"
+    if args.save_null:
+        null_dir.mkdir(exist_ok=True)
+
+    manifest_rows = []
+    for context in contexts:
+        manifest_rows.append({
+            key: value for key, value in context.items()
+            if key not in {"membership", "adverse_membership"}
+        })
+    pd.DataFrame(manifest_rows).to_csv(args.output_dir / "context_manifest.csv", index=False)
     started = time.time()
     for context_number, context in enumerate(contexts, start=1):
         # A contextual GEP does not contribute to its own evaluated graph
@@ -307,6 +322,8 @@ def main():
                 row[f"z__{metric}"] = z[index]
                 row[f"p__{metric}"] = p[index]
             context_rows.append(row)
+            # This file is intentionally updated after every completed test.
+            pd.DataFrame(context_rows).to_csv(result_path, index=False)
 
             name = safe_name(context["context"])
             pd.DataFrame(high, index=graph_features, columns=graph_features).to_csv(
@@ -316,8 +333,9 @@ def main():
                 matrix_dir / f"{name}__{geometry}__favorable.csv"
             )
             if args.save_null:
+                current_null = []
                 for permutation in range(args.permutations):
-                    null_rows.append({
+                    current_null.append({
                         "context": context["context"],
                         "geometry": geometry,
                         "permutation": permutation + 1,
@@ -327,6 +345,10 @@ def main():
                             for index, metric in enumerate(METRICS)
                         },
                     })
+                null_rows.extend(current_null)
+                pd.DataFrame(current_null).to_csv(
+                    null_dir / f"{name}__{geometry}.csv", index=False
+                )
             print(
                 f"[{context_number}/{len(contexts)}] {context['context']} | {geometry} | "
                 f"joint z={joint_z:.2f}, p={joint_p:.4g}", flush=True
@@ -346,19 +368,11 @@ def main():
                 results.loc[indices, f"p__{metric}"]
             )
     results["joint_rank"] = results.joint_rank.astype(int)
-    results.to_csv(args.output_dir / "predictive_field_context_results.csv", index=False)
+    results.to_csv(result_path, index=False)
     if null_rows:
         pd.DataFrame(null_rows).to_csv(
             args.output_dir / "predictive_field_permutation_null.csv", index=False
         )
-
-    manifest_rows = []
-    for context in contexts:
-        manifest_rows.append({
-            key: value for key, value in context.items()
-            if key not in {"membership", "adverse_membership"}
-        })
-    pd.DataFrame(manifest_rows).to_csv(args.output_dir / "context_manifest.csv", index=False)
 
     olambda = contexts[0]
     lodo_path = args.output_dir / "olambda_leave_one_dataset_out.csv"
@@ -369,6 +383,9 @@ def main():
             states[geometry], bootstrap_weights, olambda["adverse_membership"], beta,
             datasets, args.lodo_permutations,
             args.random_state + (10000 if geometry == "global" else 0),
+            checkpoint_path=(
+                args.output_dir / f"olambda_lodo_{geometry}_checkpoint.csv"
+            ),
         )
         lodo.insert(0, "geometry", geometry)
         lodo.to_csv(lodo_path, mode="a", header=not lodo_path.exists(), index=False)

@@ -61,6 +61,9 @@ def main():
     crossfit = pd.read_csv(args.crossfit_results_csv)
     fold_rows = []
     fold_null = {}
+    fold_result_path = args.output_dir / "crossfit_predictive_field_by_dataset.csv"
+    null_dir = args.output_dir / "permutation_null_parts"
+    null_dir.mkdir(exist_ok=True)
     for fold_number, heldout in enumerate(sorted(patients.Dataset.unique()), start=1):
         index = np.flatnonzero(datasets == heldout)
         high_probability = patients.loc[index, 'posterior_mean_probability_high'].to_numpy(float)
@@ -108,6 +111,10 @@ def main():
             row[f"z__{metric}"] = z[metric_index]
             row[f"p__{metric}"] = p[metric_index]
         fold_rows.append(row)
+        pd.DataFrame(fold_rows).to_csv(fold_result_path, index=False)
+        np.savez_compressed(
+            null_dir / f"{heldout}.npz", null=null, joint_null=joint_null
+        )
         print(
             f"[{fold_number}/{patients.Dataset.nunique()}] {heldout} | n={len(index)} | "
             f"joint z={joint_z:.2f}, p={joint_p:.4g}", flush=True
@@ -116,7 +123,7 @@ def main():
     folds = pd.DataFrame(fold_rows)
     if folds.empty:
         raise ValueError("No held-out dataset had sufficient effective regime size.")
-    folds.to_csv(args.output_dir / "crossfit_predictive_field_by_dataset.csv", index=False)
+    folds.to_csv(fold_result_path, index=False)
 
     combined_rows = []
     standardized_null = []

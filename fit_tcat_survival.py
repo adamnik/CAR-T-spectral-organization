@@ -22,6 +22,63 @@ from survival_model import summarize_adjustments, summarize_effects, survival_ar
 
 JOINT_GLOBAL_SCALE = 0.30
 JOINT_DATASET_SCALE = 0.20
+OLAMBDA_FEATURE = "O_lambda_inf"
+
+
+def add_olambda_particles(data, central, particles, particle_weights, feature_names,
+                          estimates_path, particles_path, random_state):
+    """Add inferred O-lambda as one more uncertain patient-level feature."""
+    estimates = pd.read_csv(estimates_path)[
+        ["Dataset", "sample_id", "O_lambda_inf_central"]
+    ]
+    particle_table = pd.read_csv(particles_path)
+    particle_columns = sorted(
+        (column for column in particle_table if column.startswith("particle_")),
+        key=lambda column: int(column.split("_", 1)[1]),
+    )
+    if len(particle_columns) != particles.shape[1]:
+        raise ValueError(
+            f"TCAT has {particles.shape[1]} particles but O_lambda has "
+            f"{len(particle_columns)}."
+        )
+    expected_weights = np.full_like(particle_weights, 1.0 / particles.shape[1])
+    if not np.allclose(particle_weights, expected_weights):
+        raise ValueError("Joint TCAT and O_lambda fitting requires equally weighted TCAT particles.")
+
+    table = estimates.merge(
+        particle_table[["Dataset", "sample_id", *particle_columns]],
+        on=["Dataset", "sample_id"], how="inner", validate="one_to_one",
+    )
+    joined = data.reset_index(names="tcat_row").merge(
+        table, on=["Dataset", "sample_id"], how="inner", validate="one_to_one",
+    )
+    if joined.empty:
+        raise ValueError("No patients are shared by the TCAT and O_lambda estimates.")
+    row = joined.tcat_row.to_numpy(int)
+    olambda_central = pd.to_numeric(
+        joined.O_lambda_inf_central, errors="coerce"
+    ).to_numpy(float)
+    olambda_particles = joined[particle_columns].apply(
+        pd.to_numeric, errors="coerce"
+    ).to_numpy(float)
+    if np.any(~np.isfinite(olambda_central)) or np.any(~np.isfinite(olambda_particles)):
+        raise ValueError("O_lambda estimates and particles must be finite.")
+
+    # Particle indices have no intrinsic correspondence across the two first-stage models.
+    rng = np.random.default_rng(random_state)
+    for patient in range(len(olambda_particles)):
+        olambda_particles[patient] = olambda_particles[patient, rng.permutation(len(particle_columns))]
+
+    joined = joined.drop(columns=[
+        "tcat_row", "O_lambda_inf_central", *particle_columns,
+    ])
+    joined["O_lambda_inf_central"] = olambda_central
+    central = np.column_stack([central[row], olambda_central])
+    particles = np.concatenate([
+        particles[row], olambda_particles[:, :, None],
+    ], axis=2)
+    particle_weights = particle_weights[row]
+    return joined, central, particles, particle_weights, [*feature_names, OLAMBDA_FEATURE]
 
 
 def individual_features(feature_names, requested, requested_kind, maximum):
@@ -49,6 +106,9 @@ def joint_features(feature_names, mode):
     else:
         selected = [feature for feature in feature_names if feature_kind(feature) == "cell_type"]
         blocks = [feature.split("_proportion_", 1)[0] for feature in selected]
+    if OLAMBDA_FEATURE in feature_names:
+        selected.append(OLAMBDA_FEATURE)
+        blocks.append(OLAMBDA_FEATURE)
     if len(selected) < 2:
         raise ValueError(f"At least two features are required for {mode}.")
 
@@ -96,7 +156,10 @@ def center_coefficients(values, blocks):
     pieces = []
     for _, index in block_slices(blocks):
         block = values[..., index]
-        pieces.append(block - pt.mean(block, axis=-1, keepdims=True))
+        if index.stop - index.start == 1:
+            pieces.append(block)
+        else:
+            pieces.append(block - pt.mean(block, axis=-1, keepdims=True))
     return pt.concatenate(pieces, axis=-1)
 
 
@@ -280,7 +343,10 @@ def joint_model(mode, data, central, particles, particle_weights, feature_names,
         "features": selected,
         "composition_blocks": blocks,
         "scaling": scaling,
-        "coefficient_constraint": "sum to zero within each CLR composition block",
+        "coefficient_constraint": (
+            "sum to zero within each CLR composition block; "
+            "unconstrained for O_lambda"
+        ),
         "global_shrinkage_prior": f"HalfNormal({JOINT_GLOBAL_SCALE})",
         "dataset_deviation_prior": f"HalfNormal({JOINT_DATASET_SCALE})",
         "adjustments": parse_adjustments(args.adjustment),
@@ -308,6 +374,8 @@ def main():
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--olambda-estimates-csv", type=Path)
+    parser.add_argument("--olambda-particles-csv", type=Path)
     add_adjustment_arguments(parser)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -317,6 +385,16 @@ def main():
         args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells,
         adjustment_columns=adjustments,
     )
+    olambda_inputs = [args.olambda_estimates_csv, args.olambda_particles_csv]
+    if any(olambda_inputs) and not all(olambda_inputs):
+        raise ValueError("Provide both O_lambda estimate and particle files.")
+    if args.mode == "individual" and any(olambda_inputs):
+        raise ValueError("O_lambda is added only to joint TCAT models.")
+    if args.mode != "individual" and all(olambda_inputs):
+        data, central, particles, particle_weights, feature_names = add_olambda_particles(
+            data, central, particles, particle_weights, feature_names,
+            args.olambda_estimates_csv, args.olambda_particles_csv, args.random_state,
+        )
     arrays = survival_arrays(data)
     adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
     data.to_csv(args.output_dir / "analysis_cohort.csv", index=False)
@@ -429,6 +507,8 @@ def main():
         "uncertainty_integration": "likelihood marginalized across coherent patient particles",
         "adjustments": adjustments,
         "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
+        "olambda_estimates_csv": str(args.olambda_estimates_csv) if args.olambda_estimates_csv else None,
+        "olambda_particles_csv": str(args.olambda_particles_csv) if args.olambda_particles_csv else None,
     }
     (args.output_dir / f"{args.mode}_run_manifest.json").write_text(json.dumps(run_manifest, indent=2))
 
