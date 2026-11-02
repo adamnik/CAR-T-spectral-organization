@@ -255,6 +255,33 @@ Rscript fit_olambda_asymptotes.R \
 
 This script requires R and the `nlme` package. Its primary outputs are `patient_olambda_asymptotes.csv` and `patient_olambda_particles.csv`.
 
+## Finite-depth validation
+
+`validate_olambda_asymptotes.R` evaluates finite-depth inference in patients with sufficiently deep observed trajectories. Each validation patient is excluded while the population hierarchy is fit to the remaining cohort. The held-out trajectory is then truncated at prespecified cell depths and each inferred asymptote is compared with the asymptote inferred from that patient's complete trajectory.
+
+```bash
+Rscript validate_olambda_asymptotes.R \
+  olambda_trajectory_points.csv \
+  results/olambda_asymptote_validation \
+  --validation-minimum-cells 7500 \
+  --cutoffs 1000,3000,5000 \
+  --curve-maximum-cells 15000
+```
+
+The validation saves patient- and cutoff-level estimates, interval coverage, future-trajectory error, fitted curves, and aggregate calibration statistics. Patient-level checkpoints make the run resumable.
+
+`plot_olambda_validation.R` produces matched-scale trajectory panels for selected patients. Blue denotes the cutoff-specific inferred asymptote, red denotes the complete-trajectory inferred asymptote, and the full-data panel retains only the red reference.
+
+```bash
+Rscript plot_olambda_validation.R \
+  olambda_trajectory_points.csv \
+  results/olambda_asymptote_validation \
+  results/olambda_asymptote_validation/figures \
+  --sample-ids P032_cao,ac28_li,CAR130_yu \
+  --x-maximum 15000 \
+  --dpi 1200
+```
+
 ## Technical robustness of inferred O-lambda
 
 `extract_olambda_technical_covariates.py` extracts five prespecified technical covariates from the processed infusion datasets: log cell count, mean log total counts per cell, mean mitochondrial fraction, mean log detected genes per cell, and log node count in the corresponding full-cell graph. Cell-level quantities use coherent Bayesian-bootstrap particles; cell count and graph size are exact.

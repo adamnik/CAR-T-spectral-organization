@@ -1,6 +1,5 @@
 # Synthetic checks for latent-timescale O-lambda inference
-expressions <- parse('fit_olambda_asymptotes.R')
-for (expression in expressions[-length(expressions)]) eval(expression)
+source('fit_olambda_asymptotes.R')
 
 frame <- data.frame(target_depth = seq(500, 10000, length.out = 80))
 basis <- add_basis(frame, tau = 2)
