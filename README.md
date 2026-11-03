@@ -70,6 +70,18 @@ Rscript plot_tcat_individual_effects.R \
   600
 ```
 
+`plot_tcat_hr_alignment.py` compares effect magnitude with cross-dataset directional alignment for the continuous and smooth-transition models. Filled points have a 95% credible interval excluding one. The figure includes O-lambda as a systems-level reference and uses readable labels for the supported TCAT features.
+
+```bash
+python plot_tcat_hr_alignment.py \
+  results/tcat_individual/individual_results.csv \
+  results/olambda_continuous/model_result.csv \
+  results/tcat_smooth_regimes/regime_results.csv \
+  results/olambda_smooth_regimes/model_result.csv \
+  results/tcat_hr_alignment \
+  --dpi 1200
+```
+
 ## TCAT correlation geometry
 
 `estimate_tcat_correlations.py` estimates dataset-adjusted correlations among TCAT features and between each TCAT feature and asymptotic O-lambda. Every draw independently samples one TCAT particle and one O-lambda particle per patient, draws Bayesian-bootstrap patient weights, removes weighted dataset means, and calculates the resulting correlations.
