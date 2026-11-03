@@ -160,7 +160,7 @@ figure <- ggplot(curve, aes(x = time, y = survival, color = regime, fill = regim
     axis.title = element_text(size = 11.5),
     axis.text = element_text(color = "#252525"),
     legend.position = "inside",
-    legend.position.inside = c(0.80, 0.16),
+    legend.position.inside = c(0.82, 0.63),
     legend.background = element_rect(fill = "white", color = "#D0D0D0", linewidth = 0.3),
     legend.key.width = unit(1.3, "cm"),
     panel.grid.major.y = element_line(color = "#E8E8E8", linewidth = 0.35),
