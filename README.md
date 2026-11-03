@@ -61,6 +61,15 @@ The individual models estimate a global effect and hierarchically pooled dataset
 
 The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; cell-label proportions are constrained separately within each label composition. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
 
+`plot_tcat_individual_effects.R` displays the independent results separately for GEPs, the two derived scores, and cell-type proportions. Each figure pairs the global hazard ratio and 95% credible interval with the posterior probability that every dataset shares the same effect direction. Hazard ratios use a symmetric log2 scale around one. Internal TCAT identifiers are replaced by readable biological labels; mixed-lineage programs originally named as doublets are labeled as lineage-like programs.
+
+```bash
+Rscript plot_tcat_individual_effects.R \
+  results/tcat_individual/individual_results.csv \
+  results/tcat_individual/figures \
+  600
+```
+
 ## TCAT correlation geometry
 
 `estimate_tcat_correlations.py` estimates dataset-adjusted correlations among TCAT features and between each TCAT feature and asymptotic O-lambda. Every draw independently samples one TCAT particle and one O-lambda particle per patient, draws Bayesian-bootstrap patient weights, removes weighted dataset means, and calculates the resulting correlations.
