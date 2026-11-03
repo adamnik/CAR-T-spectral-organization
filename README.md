@@ -186,6 +186,19 @@ python fit_tcat_survival_regimes.py \
 
 Completed feature models are checkpointed independently. The combined results record the high-versus-low plateau hazard ratio, dataset-direction agreement, and the posterior crossover in both native CLR units and as a percentile of the observed patient distribution. These models are intended as a secondary nonlinear comparison with the O-lambda regime rather than a replacement for the primary continuous TCAT models.
 
+## O-lambda regime survival curve
+
+`plot_olambda_survival_turnbull.R` creates a stepwise, interval-censored survival curve from the O-lambda change-point results. Patients are classified using the posterior-median crossover and their central inferred O-lambda. The Turnbull estimator preserves each reported event interval; the adjusted Bayesian hazard ratio remains the inferential result displayed on the figure.
+
+```bash
+Rscript plot_olambda_survival_turnbull.R \
+  results/olambda_survival_regimes/patient_regime_probabilities.csv \
+  clinical_outcomes.csv \
+  results/olambda_survival_regimes/model_result.csv \
+  results/olambda_survival_regimes/turnbull_survival.png \
+  60 600
+```
+
 ## Finite-depth O-lambda trajectories
 
 `extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures spectral organization across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates exact-center O-lambda.
