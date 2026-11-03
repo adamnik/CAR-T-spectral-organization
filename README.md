@@ -96,14 +96,15 @@ python estimate_tcat_correlations.py \
 
 The primary outputs are posterior summaries for all pairwise TCAT correlations and all O-lambda–TCAT correlations. Complete posterior draws can optionally be retained with `--save-draws`.
 
-`plot_tcat_correlation_matrices.py` creates separate GEP and cell-type figures. Each Bayesian correlation matrix is followed by perfectly aligned rows showing correlation with asymptotic O-lambda and the continuous survival effect on the symmetric log2 hazard-ratio scale.
+`plot_tcat_correlation_matrices.py` creates separate GEP and cell-type figures. Each Bayesian correlation matrix is followed by perfectly aligned rows showing correlation with asymptotic O-lambda and the continuous survival effect on the symmetric log2 hazard-ratio scale. TCAT–TCAT and O-lambda–TCAT correlations share one `[-1, 1]` color scale; the hazard-ratio row retains its own scale.
 
 ```bash
 python plot_tcat_correlation_matrices.py \
   results/tcat_correlations/tcat_pairwise_correlations.csv \
   results/tcat_correlations/olambda_tcat_correlations.csv \
   results/tcat_individual/individual_results.csv \
-  results/tcat_correlation_figures
+  results/tcat_correlation_figures \
+  --dpi 1200
 ```
 
 Black markers denote posterior directional probability of at least 0.95 for O-lambda correlations and a 95% credible interval excluding one for survival effects. The matrix order is determined by average-linkage clustering of the posterior-median correlations.
