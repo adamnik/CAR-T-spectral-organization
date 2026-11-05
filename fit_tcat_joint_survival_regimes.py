@@ -10,6 +10,7 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
+from analysis_io import feature_kind
 from fit_tcat_survival import add_olambda_particles, sample_model, summarize_joint
 from survival_model import add_adjustment_arguments, adjustment_design, adjustment_parameters
 from survival_model import baseline_parameters, diagnostics, interval_loglikelihood
@@ -51,6 +52,9 @@ def main():
     parser.add_argument("olambda_regime_result_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--minimum-cells", type=int, default=1000)
+    parser.add_argument(
+        "--feature-kind", choices=["all", "gep", "cell_type"], default="all"
+    )
     parser.add_argument("--transition-scale-sd", type=float, default=0.10)
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
@@ -75,6 +79,16 @@ def main():
         args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells,
         adjustment_columns=adjustments,
     )
+    if args.feature_kind != "all":
+        selected = [
+            index for index, feature in enumerate(feature_names)
+            if feature_kind(feature).lower() == args.feature_kind
+        ]
+        if not selected:
+            raise ValueError(f"No {args.feature_kind} features were found.")
+        central = central[:, selected]
+        particles = particles[:, :, selected]
+        feature_names = [feature_names[index] for index in selected]
     data, central, particles, particle_weights, feature_names = add_olambda_particles(
         data, central, particles, particle_weights, feature_names,
         args.olambda_estimates_csv, args.olambda_particles_csv, args.random_state,
@@ -174,6 +188,7 @@ def main():
     idata.to_netcdf(args.output_dir / "posterior.nc")
     manifest = {
         "model": "joint smooth TCAT and O_lambda survival regimes",
+        "feature_kind": args.feature_kind,
         "crossovers": "fixed at individual Bayesian posterior medians",
         "features": feature_names,
         "minimum_cells": args.minimum_cells,
