@@ -83,7 +83,7 @@ def fit_feature(feature, feature_index, data, central, particles, particle_weigh
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Refit every TCAT GEP survival effect while holding out one dataset."
+        description="Refit patient-level feature effects while holding out one dataset."
     )
     parser.add_argument("estimates_csv", type=Path)
     parser.add_argument("particles_npz", type=Path)
@@ -96,6 +96,9 @@ def main():
     parser.add_argument("--cores", type=int, default=2)
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument(
+        "--feature-kind", choices=["gep", "cell_type", "all"], default="gep"
+    )
     parser.add_argument("--save-posteriors", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     add_adjustment_arguments(parser)
@@ -107,12 +110,21 @@ def main():
         args.estimates_csv, args.particles_npz, args.outcomes_csv, args.minimum_cells,
         adjustment_columns=adjustments,
     )
-    gep_names = [feature for feature in feature_names if feature.startswith("TCAT_GEP_")]
+    if args.feature_kind == "all":
+        selected_features = list(feature_names)
+    else:
+        selected_features = [
+            feature for feature in feature_names
+            if feature_kind(feature).lower() == args.feature_kind
+        ]
+    if not selected_features:
+        raise ValueError(f"No {args.feature_kind} features were found.")
     feature_lookup = {feature: index for index, feature in enumerate(feature_names)}
     datasets = sorted(data.Dataset.astype(str).unique())
     data.to_csv(args.output_dir / "analysis_cohort.csv", index=False)
     print(
-        f"Cross-fitting {len(gep_names):,} GEP effects across {len(datasets):,} held-out datasets | "
+        f"Cross-fitting {len(selected_features):,} {args.feature_kind} effects across "
+        f"{len(datasets):,} held-out datasets | "
         f"{len(data):,} patients",
         flush=True,
     )
@@ -139,14 +151,14 @@ def main():
         )
         print("#" * 108, flush=True)
 
-        for feature_number, feature in enumerate(gep_names, start=1):
+        for feature_number, feature in enumerate(selected_features, start=1):
             feature_dir = fold_dir / "features" / (
                 f"{feature_lookup[feature]:03d}_{safe_name(feature)}"
             )
             feature_dir.mkdir(parents=True, exist_ok=True)
             result_path = feature_dir / "model_result.csv"
             adjustment_path = feature_dir / "adjustment_effects.csv"
-            print(f'[{feature_number}/{len(gep_names)}] {feature}', flush=True)
+            print(f'[{feature_number}/{len(selected_features)}] {feature}', flush=True)
             can_resume = (
                 result_path.exists()
                 and not args.overwrite
@@ -188,9 +200,10 @@ def main():
             )
 
     manifest = {
-        "model": "leave-one-dataset-out independent TCAT GEP survival effects",
+        "model": "leave-one-dataset-out independent patient-level survival effects",
         "heldout_datasets": datasets,
-        "features": gep_names,
+        "feature_kind": args.feature_kind,
+        "features": selected_features,
         "minimum_cells": args.minimum_cells,
         "draws": args.draws,
         "tune": args.tune,

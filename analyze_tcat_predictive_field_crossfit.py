@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from analysis_io import feature_kind
 from analyze_tcat_predictive_field import posterior_median_correlations, posterior_states
 from predictive_field import DESIRED_SIGN, METRICS, field_contrast
 from predictive_field import permutation_summary, permute_within_dataset
@@ -14,7 +15,7 @@ from predictive_field import permutation_summary, permute_within_dataset
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate O-lambda organization using TCAT effects fit without each dataset."
+        description="Evaluate O-lambda organization using effects fit without each dataset."
     )
     parser.add_argument("tcat_particles_npz", type=Path)
     parser.add_argument("olambda_regime_membership_csv", type=Path)
@@ -24,16 +25,22 @@ def main():
     parser.add_argument("--permutations", type=int, default=5000)
     parser.add_argument("--minimum-effective-regime", type=float, default=3.0)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument(
+        "--feature-kind", choices=["gep", "cell_type"], default="gep"
+    )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     archive = np.load(args.tcat_particles_npz, allow_pickle=False)
     feature_names = archive["feature_names"].astype(str)
-    gep_names = np.asarray([
-        feature for feature in feature_names if feature.startswith("TCAT_GEP_")
+    field_features = np.asarray([
+        feature for feature in feature_names
+        if feature_kind(feature).lower() == args.feature_kind
     ])
+    if not len(field_features):
+        raise ValueError(f"No {args.feature_kind} features were found.")
     feature_lookup = {feature: index for index, feature in enumerate(feature_names)}
-    gep_indices = np.asarray([feature_lookup[feature] for feature in gep_names])
+    field_indices = np.asarray([feature_lookup[feature] for feature in field_features])
     patients = pd.DataFrame({
         "Dataset": archive["datasets"].astype(str),
         "sample_id": archive["patient_ids"].astype(str),
@@ -48,7 +55,7 @@ def main():
     )
     patients = patients.sort_values(['Dataset', 'sample_id']).reset_index(drop=True)
     rows = patients.particle_row.to_numpy(int)
-    values = np.asarray(archive["values"][rows][:, :, gep_indices], dtype=float)
+    values = np.asarray(archive["values"][rows][:, :, field_indices], dtype=float)
     particle_weights = np.asarray(archive["particle_weights"][rows], dtype=float)
     particle_weights /= particle_weights.sum(axis=1, keepdims=True)
     datasets = patients.Dataset.astype(str).to_numpy()
@@ -78,10 +85,12 @@ def main():
 
         keep = crossfit.heldout_dataset.astype(str).eq(heldout)
         effects = crossfit.loc[keep].set_index('feature')
-        missing = sorted(set(gep_names).difference(effects.index.astype(str)))
+        missing = sorted(set(field_features).difference(effects.index.astype(str)))
         if missing:
-            raise ValueError(f"Cross-fitted field for {heldout} is missing {len(missing)} GEPs.")
-        beta = np.log(effects.loc[gep_names, "HR_median"].to_numpy(float))
+            raise ValueError(
+                f"Cross-fitted field for {heldout} is missing {len(missing)} features."
+            )
+        beta = np.log(effects.loc[field_features, "HR_median"].to_numpy(float))
         high, low = posterior_median_correlations(
             states, bootstrap_weights, high_probability, index
         )
@@ -165,8 +174,9 @@ def main():
     combined.to_csv(args.output_dir / "crossfit_predictive_field_combined.csv", index=False)
 
     manifest = {
-        "validation": "dataset-held-out TCAT clinical field",
-        "clinical_field": "posterior-median GEP log-HRs fit without the evaluated dataset",
+        "validation": "dataset-held-out clinical field",
+        "feature_kind": args.feature_kind,
+        "clinical_field": "posterior-median log-HRs fit without the evaluated dataset",
         "regime_membership": "full-cohort O-lambda Bayesian change-point probabilities",
         "geometry": "within held-out dataset",
         "correlation_draws": args.correlation_draws,
