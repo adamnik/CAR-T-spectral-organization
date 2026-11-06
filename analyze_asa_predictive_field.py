@@ -134,7 +134,7 @@ def append_rows(path, new_rows, field=None):
 
 
 def analyze_one_field(field, particles_path, continuous_results_csv, feature_prefix,
-                      context, excluded_features, args, completed_rows, started):
+                      context, excluded_features, geometries, args, completed_rows, started):
     prepared = prepare_field(
         field, particles_path, continuous_results_csv, feature_prefix,
         context, excluded_features,
@@ -162,7 +162,7 @@ def analyze_one_field(field, particles_path, continuous_results_csv, feature_pre
         (str(row["field"]), str(row["geometry"])) for row in completed_rows
     }
     field_number = 0 if field == "atlas_cell_type" else 1
-    for geometry_number, geometry in enumerate(["global", "dataset_adjusted"]):
+    for geometry_number, geometry in enumerate(geometries):
         if (field, geometry) in completed and not args.overwrite:
             print(f"[RESUME] {field} | {geometry}", flush=True)
             continue
@@ -236,9 +236,14 @@ def main():
     parser.add_argument("--correlation-draws", type=int, default=500)
     parser.add_argument("--permutations", type=int, default=10000)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument(
+        "--geometry", action="append", choices=["global", "dataset_adjusted"],
+        help="Geometry to test. Repeat to run both; the default is both geometries.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    geometries = args.geometry or ["global", "dataset_adjusted"]
 
     context = asa_context(args.tcat_regime_dir, args.tcat_continuous_results_csv)
     manifest_context = {
@@ -256,19 +261,21 @@ def main():
 
     result_path = args.output_dir / "asa_predictive_field_results.csv"
     if result_path.exists() and not args.overwrite:
-        completed_rows = pd.read_csv(result_path).to_dict("records")
+        completed = pd.read_csv(result_path)
+        completed = completed.loc[completed.geometry.astype(str).isin(geometries)]
+        completed_rows = completed.to_dict("records")
     else:
         completed_rows = []
     started = time.time()
     analyze_one_field(
         "atlas_cell_type", args.atlas_particles_npz,
         args.atlas_continuous_results_csv, "ATLAS_proportion_",
-        context, [], args, completed_rows, started,
+        context, [], geometries, args, completed_rows, started,
     )
     analyze_one_field(
         "TCAT_GEP_excluding_ASA", args.tcat_particles_npz,
         args.tcat_continuous_results_csv, "TCAT_GEP_",
-        context, ASA_GEP_FEATURES, args, completed_rows, started,
+        context, ASA_GEP_FEATURES, geometries, args, completed_rows, started,
     )
 
     results = add_multiple_testing_columns(pd.DataFrame(completed_rows))
@@ -287,7 +294,7 @@ def main():
         "gep_field": "TCAT GEPs excluding the four components used to construct ASA",
         "excluded_ASA_components": ASA_GEP_FEATURES,
         "metrics": METRICS,
-        "geometries": ["global", "dataset_adjusted"],
+        "geometries": geometries,
         "patient_uncertainty": "particle sampling and Bayesian patient bootstrap",
         "permutation": "ASA adverse-regime probabilities shuffled within dataset",
         "correlation_draws": args.correlation_draws,
