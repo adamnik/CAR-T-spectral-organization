@@ -16,6 +16,8 @@ FEATURES = [
     "mean_mito_fraction",
     "mean_log1p_detected_genes",
     "log_graph_nodes",
+    "graph_density",
+    "mean_nonzero_mi_weight",
     "cluster_composition_entropy",
     "pca_effective_rank",
     "mean_pairwise_cell_state_distance",
@@ -83,7 +85,8 @@ def state_metrics(embedding, weights, pair_first, pair_second, pair_distance):
 
 
 def patient_values(metrics, labels, label_levels, embedding, n_cells,
-                   graph_nodes, n_particles, distance_pairs, rng):
+                   graph_nodes, graph_density, mean_nonzero_mi_weight,
+                   n_particles, distance_pairs, rng):
     central_cell_values = metrics.mean(axis=0)
     weights = rng.exponential(size=(n_particles, n_cells))
     weights /= weights.sum(axis=1, keepdims=True)
@@ -124,20 +127,22 @@ def patient_values(metrics, labels, label_levels, embedding, n_cells,
     central = np.concatenate([
         [np.log(n_cells)],
         central_cell_values,
-        [np.log(graph_nodes)],
+        [np.log(graph_nodes), graph_density, mean_nonzero_mi_weight],
         [central_entropy, central_rank, central_distance],
     ])
     particles = np.column_stack([
         np.repeat(np.log(n_cells), n_particles),
         particle_cell_values,
         np.repeat(np.log(graph_nodes), n_particles),
+        np.repeat(graph_density, n_particles),
+        np.repeat(mean_nonzero_mi_weight, n_particles),
         particle_entropy,
         particle_state,
     ])
     return central, particles
 
 
-def full_graph_nodes(trajectory_path):
+def full_graph_covariates(trajectory_path):
     trajectories = pd.read_csv(trajectory_path)
     required = {"Dataset", "sample_id", "is_full_reference", "n_nodes_used"}
     missing = required.difference(trajectories.columns)
@@ -147,17 +152,55 @@ def full_graph_nodes(trajectory_path):
     full = trajectories.is_full_reference
     if full.dtype != bool:
         full = full.astype(str).str.lower().eq("true")
-    full = trajectories.loc[full, ["Dataset", "sample_id", "n_nodes_used"]].copy()
+    columns = ["Dataset", "sample_id", "n_nodes_used"]
+    for column in ["graph_density", "mean_nonzero_mi_weight"]:
+        if column in trajectories:
+            columns.append(column)
+    full = trajectories.loc[full, columns].copy()
     full["n_nodes_used"] = pd.to_numeric(full.n_nodes_used, errors="coerce")
     full = full.dropna(subset=["n_nodes_used"])
     full = full.loc[full.n_nodes_used > 1]
+    aggregations = {
+        "graph_nodes": ("n_nodes_used", "median"),
+        "graph_node_minimum": ("n_nodes_used", "min"),
+        "graph_node_maximum": ("n_nodes_used", "max"),
+        "full_graph_rows": ("n_nodes_used", "size"),
+    }
+    if "graph_density" in full:
+        aggregations["graph_density"] = ("graph_density", "median")
+    if "mean_nonzero_mi_weight" in full:
+        aggregations["mean_nonzero_mi_weight"] = (
+            "mean_nonzero_mi_weight", "median",
+        )
     graph_nodes = full.groupby(["Dataset", "sample_id"], as_index=False).agg(
-        graph_nodes=("n_nodes_used", "median"),
-        graph_node_minimum=("n_nodes_used", "min"),
-        graph_node_maximum=("n_nodes_used", "max"),
-        full_graph_rows=("n_nodes_used", "size"),
+        **aggregations,
     )
     return graph_nodes
+
+
+def graph_statistics_table(path, datasets):
+    frame = pd.read_csv(path)
+    required = {
+        "Dataset", "sample_id", "graph_density",
+        "mean_nonzero_mi_weight", "n_nodes_used",
+    }
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"Graph-statistics table is missing columns: {sorted(missing)}")
+    frame = frame.loc[frame.Dataset.astype(str).isin(datasets)].copy()
+    if "experiment" in frame:
+        patient_bootstrap = frame.experiment.astype(str).eq("patient-bootstrap")
+        if patient_bootstrap.any():
+            frame = frame.loc[patient_bootstrap].copy()
+    if "replicate" in frame:
+        frame["replicate"] = pd.to_numeric(frame.replicate, errors="coerce")
+        frame = frame.sort_values("replicate")
+    frame = frame.drop_duplicates(["Dataset", "sample_id"], keep="first")
+    frame = frame.rename(columns={"n_nodes_used": "saved_graph_nodes"})
+    return frame[[
+        "Dataset", "sample_id", "saved_graph_nodes",
+        "graph_density", "mean_nonzero_mi_weight",
+    ]]
 
 
 def main():
@@ -170,6 +213,7 @@ def main():
     parser.add_argument("dataset_manifest", type=Path)
     parser.add_argument("trajectory_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--graph-statistics-csv", type=Path, default=None)
     parser.add_argument("--sample-key", default="sample_id")
     parser.add_argument("--layer", default=None)
     parser.add_argument("--mito-prefix", default="MT-")
@@ -200,8 +244,35 @@ def main():
     missing = required.difference(datasets.columns)
     if missing:
         raise ValueError(f"Dataset manifest is missing columns: {sorted(missing)}")
-    graph_nodes = full_graph_nodes(args.trajectory_csv)
-    graph_lookup = graph_nodes.set_index(["Dataset", "sample_id"]).graph_nodes.to_dict()
+    graph_values = full_graph_covariates(args.trajectory_csv)
+    needs_saved_graphs = not {
+        "graph_density", "mean_nonzero_mi_weight",
+    }.issubset(graph_values.columns)
+    if args.graph_statistics_csv is not None:
+        graph_values = graph_values.drop(
+            columns=["graph_density", "mean_nonzero_mi_weight"],
+            errors="ignore",
+        )
+        needs_saved_graphs = True
+    if needs_saved_graphs:
+        if args.graph_statistics_csv is not None:
+            saved_graphs = graph_statistics_table(
+                args.graph_statistics_csv,
+                set(datasets.Dataset.astype(str)),
+            )
+        else:
+            raise ValueError(
+                "The trajectory table predates graph-density summaries. Supply "
+                "--graph-statistics-csv."
+            )
+        graph_values = graph_values.merge(
+            saved_graphs[[
+                "Dataset", "sample_id", "saved_graph_nodes",
+                "graph_density", "mean_nonzero_mi_weight",
+            ]],
+            on=["Dataset", "sample_id"], how="left", validate="one_to_one",
+        )
+    graph_lookup = graph_values.set_index(["Dataset", "sample_id"]).to_dict("index")
     rng = np.random.default_rng(args.random_state)
 
     label_levels = set()
@@ -295,7 +366,26 @@ def main():
 
                 patient_matrix = matrix_to_memory(matrix[rows, :])
                 metrics = cell_metrics(patient_matrix, mitochondrial)
-                graph_size = float(graph_lookup[key])
+                graph_values_for_patient = graph_lookup[key]
+                graph_size = float(graph_values_for_patient["graph_nodes"])
+                graph_density = float(graph_values_for_patient["graph_density"])
+                mean_nonzero_mi_weight = float(
+                    graph_values_for_patient["mean_nonzero_mi_weight"]
+                )
+                if not np.isfinite(graph_density) or not np.isfinite(mean_nonzero_mi_weight):
+                    print(
+                        f"  [{patient_number}/{len(patients)}] {patient}: "
+                        "skipped (missing graph edge statistics)",
+                        flush=True,
+                    )
+                    cohort_rows.append({
+                        "Dataset": dataset,
+                        "sample_id": patient,
+                        "n_cells": len(rows),
+                        "included": False,
+                        "reason": "missing graph edge statistics",
+                    })
+                    continue
                 central, particles = patient_values(
                     metrics,
                     labels[rows],
@@ -303,6 +393,8 @@ def main():
                     embedding[rows],
                     len(rows),
                     graph_size,
+                    graph_density,
+                    mean_nonzero_mi_weight,
                     args.n_particles,
                     args.distance_pairs,
                     rng,
@@ -312,6 +404,8 @@ def main():
                     "sample_id": patient,
                     "n_cells": len(rows),
                     "graph_nodes": graph_size,
+                    "graph_density": graph_density,
+                    "mean_nonzero_mi_weight": mean_nonzero_mi_weight,
                     **dict(zip(FEATURES, central)),
                 })
                 for feature_index, feature in enumerate(FEATURES):
@@ -363,6 +457,7 @@ def main():
     manifest = {
         "dataset_manifest": str(args.dataset_manifest),
         "trajectory_csv": str(args.trajectory_csv),
+        "graph_statistics_csv": None if args.graph_statistics_csv is None else str(args.graph_statistics_csv),
         "sample_key": args.sample_key,
         "layer": args.layer,
         "mito_prefix": args.mito_prefix,
@@ -377,6 +472,8 @@ def main():
         "particle_method": "patient-level Bayesian bootstrap with shared Dirichlet(1) cell weights",
         "features": FEATURES,
         "graph_size_definition": "n_nodes_used in the full-reference O-lambda graph",
+        "graph_density_definition": "positive undirected MI edges divided by G choose 2 after symmetrization, nonnegative truncation, and isolate removal; graph source recorded by graph_statistics_csv",
+        "mean_nonzero_mi_weight_definition": "mean positive upper-triangle MI weight after symmetrization, nonnegative truncation, and isolate removal; graph source recorded by graph_statistics_csv",
         "cluster_entropy_definition": "Shannon entropy divided by log(number of global label levels)",
         "pca_effective_rank_definition": "exponential spectral entropy of the weighted within-patient cell-state covariance",
         "mean_pairwise_distance_definition": "weighted mean Euclidean cell-state distance over fixed random cell pairs",

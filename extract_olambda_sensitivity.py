@@ -230,11 +230,26 @@ def common_cell_type_target(patient_manifest, native_composition,
     return target / target.sum()
 
 
+def save_graph(path, graph, gene_indices, gene_names):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(str(path) + ".partial")
+    with temporary.open("wb") as file:
+        np.savez_compressed(
+            file,
+            W=graph.detach().cpu().numpy().astype(np.float32, copy=False),
+            gene_indices=np.asarray(gene_indices, dtype=np.int64),
+            gene_names=np.asarray(gene_names, dtype="U"),
+        )
+    temporary.replace(path)
+
+
 @torch.inference_mode()
-def calculate_olambda(expression, gene_indices, device):
+def calculate_olambda(expression, gene_indices, gene_names, device, graph_path=None):
     started = time.perf_counter()
     graph = binary_plugin_mi(expression[:, gene_indices], device)
     graph_seconds = time.perf_counter() - started
+    if graph_path is not None:
+        save_graph(graph_path, graph, gene_indices, gene_names)
     spectral_started = time.perf_counter()
     values = spectral_organization(graph)
     values["graph_seconds"] = graph_seconds
@@ -290,6 +305,7 @@ def main():
     parser.add_argument("--dataset", action="append", default=None)
     parser.add_argument("--patient", action="append", default=None)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument("--save-graphs", action="store_true")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -318,8 +334,11 @@ def main():
     parts_dir = args.output_dir / "replicate_parts"
     composition_dir = args.output_dir / "composition_parts"
     donor_dir = args.output_dir / "donor_parts"
+    graph_dir = args.output_dir / "graphs_by_dataset"
     for directory in [parts_dir, composition_dir, donor_dir]:
         directory.mkdir(exist_ok=True)
+    if args.save_graphs:
+        graph_dir.mkdir(exist_ok=True)
     errors_path = args.output_dir / "errors.csv"
 
     print("GPU:", torch.cuda.get_device_name(0), flush=True)
@@ -374,13 +393,14 @@ def main():
         "spectral_statistic": "exact-center O_lambda with one Perron mode removed",
         "gene_universe": "target patient's native full-depth two-state gene set",
         "random_state": args.random_state,
+        "save_graphs": args.save_graphs,
     }
     configuration_path = args.output_dir / "sensitivity_configuration.json"
     if configuration_path.exists():
         previous = json.loads(configuration_path.read_text())
         changing = [
             key for key in configuration
-            if key not in {"created_at_utc", "replicates"}
+            if key not in {"created_at_utc", "replicates", "save_graphs"}
             and previous.get(key) != configuration[key]
         ]
         if changing:
@@ -451,7 +471,14 @@ def main():
                 pending = []
                 for replicate in range(args.replicates):
                     name = f"{safe_name(dataset)}__{safe_name(patient)}__r{replicate}.csv"
-                    if not (parts_dir / name).exists():
+                    graph_path = (
+                        graph_dir / safe_name(dataset) /
+                        f"{safe_name(patient)}__r{replicate}.npz"
+                    )
+                    complete = (parts_dir / name).exists()
+                    if args.save_graphs:
+                        complete = complete and graph_path.exists()
+                    if not complete:
                         pending.append(replicate)
                 job_number += args.replicates - len(pending)
                 print("\n" + "=" * 108, flush=True)
@@ -481,6 +508,10 @@ def main():
                     )
                     rng = np.random.default_rng(seed)
                     name = f"{safe_name(dataset)}__{safe_name(patient)}__r{replicate}.csv"
+                    graph_path = (
+                        graph_dir / safe_name(dataset) /
+                        f"{safe_name(patient)}__r{replicate}.npz"
+                    )
                     print(
                         f"  [{job_number}/{total_jobs}] replicate {replicate + 1}/{args.replicates}",
                         flush=True,
@@ -516,7 +547,13 @@ def main():
                         differences = [
                             abs(realized.get(x, 0) - target.get(x, 0)) for x in all_types
                         ]
-                        values = calculate_olambda(selected_expression, genes, device)
+                        values = calculate_olambda(
+                            selected_expression,
+                            genes,
+                            np.asarray(data.var_names.astype(str))[genes],
+                            device,
+                            graph_path if args.save_graphs else None,
+                        )
                         unique_cells = len(np.unique(selected_rows))
                         donor_total = sum(donor_counts.values())
                         donor_fractions = (
@@ -552,6 +589,7 @@ def main():
                             "n_genes_fixed": len(genes),
                             "source_path": str(path),
                             "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                            "mi_npz_path": str(graph_path) if args.save_graphs else "",
                             **values,
                         }
                         atomic_csv(pd.DataFrame([result]), parts_dir / name)

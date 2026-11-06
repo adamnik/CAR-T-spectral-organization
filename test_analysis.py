@@ -48,14 +48,20 @@ class AnalysisChecks(unittest.TestCase):
             assert_allclose(metrics[:, 1], [0.1, 0., 0.])
             assert_allclose(metrics[:, 2], np.log1p([2., 2., 1.]))
 
+        labels = np.asarray(["A", "A", "B"])
+        embedding = np.asarray([[0., 0.], [1., 0.], [0., 2.]])
         central, particles = technical_covariates.patient_values(
-            metrics, 3, 1000, 16, np.random.default_rng(0)
+            metrics, labels, ["A", "B"], embedding,
+            3, 1000, .6, .2, 16, 20, np.random.default_rng(0),
         )
-        self.assertEqual(central.shape, (5,))
-        self.assertEqual(particles.shape, (16, 5))
+        self.assertEqual(central.shape, (10,))
+        self.assertEqual(particles.shape, (16, 10))
         assert_allclose(central[[0, 4]], np.log([3, 1000]))
+        assert_allclose(central[[5, 6]], [.6, .2])
         assert_allclose(particles[:, 0], np.log(3))
         assert_allclose(particles[:, 4], np.log(1000))
+        assert_allclose(particles[:, 5], .6)
+        assert_allclose(particles[:, 6], .2)
 
         central_x = np.column_stack([np.arange(4), np.arange(4) * 2 + 1])
         particle_x = np.repeat(central_x[:, None, :], 3, axis=1)

@@ -25,6 +25,7 @@ RESULT_COLUMNS = [
     "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
     "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
     "O_lambda", "n_nodes_input", "n_nodes_used", "n_isolates_removed",
+    "graph_density", "mean_nonzero_mi_weight",
     "n_eigenvalues_near_one",
     "largest_eigenvalue",
     "lambda2_normalized_adjacency",
@@ -166,6 +167,11 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
         graph = graph[keep][:, keep].contiguous()
         degree = graph.sum(dim=1)
 
+    nonzero_weights = int(torch.count_nonzero(graph).item())
+    possible_weights = n_nodes_used * (n_nodes_used - 1)
+    graph_density = nonzero_weights / possible_weights
+    mean_nonzero_mi_weight = float(graph.sum().div(nonzero_weights).item())
+
     inverse_sqrt_degree = torch.rsqrt(degree.clamp_min(isolate_epsilon))
     graph.mul_(inverse_sqrt_degree[:, None])
     graph.mul_(inverse_sqrt_degree[None, :])
@@ -188,6 +194,8 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
         "n_nodes_input": n_nodes_input,
         "n_nodes_used": n_nodes_used,
         "n_isolates_removed": n_nodes_input - n_nodes_used,
+        "graph_density": graph_density,
+        "mean_nonzero_mi_weight": mean_nonzero_mi_weight,
         "n_eigenvalues_near_one": int((eigenvalues > 1 - trivial_tolerance).sum().item()),
         "largest_eigenvalue": float(eigenvalues[-1].item()),
         "lambda2_normalized_adjacency": float(nontrivial[-1].item()),
