@@ -12,11 +12,16 @@ from analysis_io import safe_name
 from analyze_cross_system_predictive_field import align_field
 from analyze_tcat_predictive_field import context_test, load_regime_memberships
 from analyze_tcat_predictive_field import posterior_states
-from extract_tcat_patient_particles import ASA_COMPONENTS
 from predictive_field import METRICS, benjamini_hochberg
 
 
 ASA_FEATURE = "TCAT_SCORE_ASA_CLR"
+ASA_COMPONENTS = [
+    "TCAT_GEP_OX40_EBI3",
+    "TCAT_GEP_ICOS_CD38",
+    "TCAT_GEP_CTLA4_CD38",
+    "TCAT_GEP_TIMD4_TIM3",
+]
 ASA_GEP_FEATURES = [f"{feature}_CLR" for feature in ASA_COMPONENTS]
 
 
