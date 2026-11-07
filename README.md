@@ -411,6 +411,22 @@ python fit_olambda_survival_regimes.py \
 
 Both survival scripts use 16 posterior particles by default. This was the lowest evaluated resolution that reproduced the continuous hazard ratio, regime hazard ratio, and crossover estimate obtained with 21 and 64 particles.
 
+## Dataset-cross-fitted O-lambda survival
+
+`validate_olambda_survival_crossfit.py` evaluates whether either survival result is driven by one dataset and whether its learned clinical polarity transfers to omitted patients. Each fold refits the continuous and smooth-transition models after excluding one complete dataset. It then uses the training-only global effect, scaling, and crossover to construct uncertainty-aware risk-score particles for the held-out patients. The cross-fitted scores are evaluated together using dataset-specific baseline hazards and the same clinical adjustments.
+
+```bash
+python validate_olambda_survival_crossfit.py \
+  results/olambda_asymptotes/patient_olambda_asymptotes.csv \
+  results/olambda_asymptotes/patient_olambda_particles.csv \
+  clinical_outcomes.csv \
+  results/olambda_survival_crossfit \
+  --adjustment Treatment=axicel \
+  --adjustment Disease=lymphoma
+```
+
+The default validation fit uses two chains with 1,000 tuning and 1,000 posterior iterations. Every fold is resumable. The held-out analysis tests calibration and direction of training-derived risk scores; it is not a frozen prediction of absolute survival probability.
+
 Clinical outcomes must contain `Dataset`, `sample_id`, `event_observed` (or `event`), `t_start`, and `t_end`. Times are measured in months. An event with equal `t_start` and `t_end` is treated as exactly observed; an event with unequal bounds is interval censored; and a row with `event_observed = 0` is right censored at `t_end`.
 
 All survival scripts accept repeated `--adjustment COLUMN=REFERENCE` arguments. Each requested categorical variable is represented by global nuisance coefficients with a `Normal(0, 0.35)` prior by default; use `--adjustment-effect-sd` to change that scale. Patients missing a requested adjustment are excluded, and posterior adjustment effects are written separately from the primary predictor results. Adjustment labels and reference levels are supplied by the analysis rather than hard-coded in the repository. Dataset-confounded adjustment coefficients should be treated as control terms rather than independently interpretable effects.
