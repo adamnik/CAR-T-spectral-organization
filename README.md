@@ -170,14 +170,15 @@ python extract_string_pseudobulk.py \
 
 The manifest has columns `Dataset` and `h5ad_path`. The output contains every shared STRING gene in a common order; genes are not selected using their association with O-lambda.
 
-`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset effects together with treatment indicators estimated only within datasets containing more than one observed treatment.
+`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset fixed effects. The primary gene-association analysis uses dataset adjustment alone; corrected treatment contrasts remain available as an optional sensitivity analysis.
 
 ```bash
 python estimate_gene_olambda_correlations.py \
   results/string_pseudobulk_logCPM.csv \
   results/olambda_asymptotes/patient_olambda_particles.csv \
   patient_metadata_with_treatment.csv \
-  results/olambda_gene_associations
+  results/olambda_gene_associations \
+  --dataset-only
 ```
 
 The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
@@ -191,6 +192,37 @@ Rscript run_fgsea_rankings.R \
   results/olambda_gene_associations/olambda_gene_GSEA_rank.rnk \
   results/olambda_gene_associations/fgsea
 ```
+
+The Reactome EnrichmentMap is defined using all tested Reactome pathways rather than only significant pathways. `map_reactome_hierarchy.R` maps pathways to the official Reactome hierarchy. `build_reactome_enrichmentmap.R` calculates pathway overlap, applies Markov clustering, and constructs an outcome-independent initial layout. `plot_reactome_enrichment_network.R` refines that layout using similarity-weighted forces, overlays NES and FDR only after the topology is fixed, and generates the matched all-pathway module summary.
+
+```bash
+Rscript map_reactome_hierarchy.R \
+  results/olambda_gene_associations/fgsea/fgsea_Reactome.csv \
+  LowerLevelPathway2Topic_Human.txt \
+  ReactomePathwaysRelation.txt \
+  ReactomePathways.txt \
+  results/reactome_official_branch_mapping.csv
+
+Rscript build_reactome_enrichmentmap.R \
+  results/olambda_gene_associations/fgsea/fgsea_Reactome.csv \
+  results/olambda_gene_associations/fgsea/membership_Reactome.csv \
+  results/reactome_official_branch_mapping.csv \
+  results/reactome_network \
+  0.45 1.8 all
+
+Rscript plot_reactome_enrichment_network.R \
+  results/reactome_network/reactome_enrichmentmap_nodes_with_layout.csv \
+  results/reactome_network/reactome_enrichmentmap_edges.csv \
+  results/reactome_network/reactome_autoannotate_clusters.csv \
+  results/reactome_network \
+  context olambda_reactome_enrichment refined
+
+Rscript plot_olambda_hallmark_gsea.R \
+  results/olambda_gene_associations/fgsea/fgsea_Hallmark.csv \
+  results/hallmark
+```
+
+The pathway network and community assignments use only external Reactome gene membership. NES and FDR control node color and visual prominence after clustering. Communities shown in the matched summary contain at least six significant pathways, but their mean and range are calculated over every pathway in the community.
 
 ## Smooth TCAT survival regimes
 
