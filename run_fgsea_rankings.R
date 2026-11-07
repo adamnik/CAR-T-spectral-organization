@@ -8,13 +8,17 @@ suppressPackageStartupMessages({
 
 arguments <- commandArgs(trailingOnly = TRUE)
 if (length(arguments) < 2) {
-    stop("Usage: Rscript run_fgsea_rankings.R ranking.rnk output_dir [min_size] [max_size]")
+    stop(paste(
+        "Usage: Rscript run_fgsea_rankings.R ranking.rnk output_dir",
+        "[min_size] [max_size] [n_perm_simple]"
+    ))
 }
 
 ranking_path <- arguments[[1]]
 output_dir <- arguments[[2]]
 min_size <- if (length(arguments) >= 3) as.integer(arguments[[3]]) else 15L
 max_size <- if (length(arguments) >= 4) as.integer(arguments[[4]]) else 500L
+n_perm_simple <- if (length(arguments) >= 5) as.integer(arguments[[5]]) else 100000L
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 ranking <- fread(ranking_path, header = FALSE, col.names = c("gene", "score"))
@@ -43,14 +47,17 @@ for (collection_name in names(collections)) {
     collection_versions[[collection_name]] <- data.table(
         collection = collection_name,
         msigdb_version = msigdb_version,
-        pathways_before_size_filter = uniqueN(membership$gs_name)
+        pathways_before_size_filter = uniqueN(membership$gs_name),
+        minimum_pathway_size = min_size,
+        maximum_pathway_size = max_size,
+        simple_permutations = n_perm_simple
     )
     pathways <- split(membership$gene_symbol, membership$gs_name)
     result <- as.data.table(fgseaMultilevel(
         pathways = pathways, stats = statistics,
         minSize = min_size, maxSize = max_size,
         eps = 0,
-        nPermSimple = 100000,
+        nPermSimple = n_perm_simple,
         gseaParam = 1
     ))
     result[, collection := collection_name]
@@ -73,4 +80,5 @@ fwrite(combined, file.path(output_dir, "fgsea_all_collections.csv"))
 fwrite(rbindlist(collection_versions), file.path(output_dir, "fgsea_collection_versions.csv"))
 
 writeLines(capture.output(sessionInfo()), file.path(output_dir, "R_session_info.txt"))
+cat("Simple permutations:", format(n_perm_simple, big.mark = ","), "\n")
 cat("Saved:", output_dir, "\n")
