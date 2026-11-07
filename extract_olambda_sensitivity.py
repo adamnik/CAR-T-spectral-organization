@@ -20,7 +20,7 @@ from extract_olambda_trajectories import matrix_to_memory, spectral_organization
 from extract_olambda_trajectories import stable_seed, upsert_csv
 
 
-EXPERIMENTS = ['patient-bootstrap', 'cell-type-standardized', 'pooled-synthetic']
+EXPERIMENTS = ["patient-bootstrap", "pooled-synthetic"]
 
 
 def integer_quotas(proportions, total):
@@ -96,20 +96,6 @@ def weight_summary(blocks, target_cells):
 def patient_bootstrap(rows, target_cells, rng):
     drawn, weights = draw_block(np.arange(len(rows)), target_cells, rng)
     return rows[drawn], weight_summary([(target_cells, weights)], target_cells), {}
-
-
-def cell_type_standardized(rows, labels, target, target_cells, rng):
-    quotas = integer_quotas(target, target_cells)
-    selected = []
-    blocks = []
-    for cell_type, count in quotas.items():
-        candidates = np.flatnonzero(labels == cell_type)
-        if not len(candidates):
-            raise ValueError(f"Patient has no cells of target cell type {cell_type!r}.")
-        drawn, weights = draw_block(candidates, count, rng)
-        selected.append(rows[drawn])
-        blocks.append((count, weights))
-    return np.concatenate(selected), weight_summary(blocks, target_cells), {}
 
 
 def pooled_synthetic(rows_by_patient, labels, patient, target, target_cells, rng):
@@ -208,28 +194,6 @@ def metadata_scan(manifest, sample_key, cell_type_key, minimum_patient_cells):
     return pd.DataFrame(patients), pd.DataFrame(compositions)
 
 
-def common_cell_type_target(patient_manifest, native_composition,
-                            minimum_cells, minimum_proportion):
-    counts = native_composition.pivot_table(
-        index=["Dataset", "sample_id"], columns="cell_type",
-        values="native_cells", fill_value=0,
-    )
-    proportions = native_composition.pivot_table(
-        index=["Dataset", "sample_id"], columns="cell_type",
-        values="native_proportion", fill_value=0,
-    )
-    patient_index = pd.MultiIndex.from_frame(patient_manifest[["Dataset", "sample_id"]])
-    counts = counts.reindex(patient_index, fill_value=0)
-    proportions = proportions.reindex(patient_index, fill_value=0)
-    keep = (counts.min(axis=0) >= minimum_cells) & (
-        proportions.mean(axis=0) >= minimum_proportion
-    )
-    if not keep.any():
-        raise ValueError("No cell types satisfy the universal target requirements.")
-    target = proportions.loc[:, keep].mean(axis=0)
-    return target / target.sum()
-
-
 def save_graph(path, graph, gene_indices, gene_names):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(str(path) + ".partial")
@@ -300,8 +264,6 @@ def main():
     parser.add_argument("--replicates", type=int, default=25)
     parser.add_argument("--gene-cell-fraction", type=float, default=0.002)
     parser.add_argument("--minimum-state-count", type=int, default=1)
-    parser.add_argument("--minimum-common-type-cells", type=int, default=10)
-    parser.add_argument("--minimum-common-type-proportion", type=float, default=0.01)
     parser.add_argument("--dataset", action="append", default=None)
     parser.add_argument("--patient", action="append", default=None)
     parser.add_argument("--random-state", type=int, default=0)
@@ -358,26 +320,6 @@ def main():
     atomic_csv(all_patients, args.output_dir / "eligible_patient_manifest.csv")
     atomic_csv(native_composition, args.output_dir / "native_cell_type_composition.csv")
 
-    # Reuse the same target composition when resuming
-    common_target = None
-    if args.experiment == "cell-type-standardized":
-        target_path = args.output_dir / "common_cell_type_target.csv"
-        if target_path.exists():
-            target_frame = pd.read_csv(target_path)
-            common_target = target_frame.set_index("cell_type").target_proportion
-        else:
-            common_target = common_cell_type_target(
-                all_patients, native_composition,
-                args.minimum_common_type_cells,
-                args.minimum_common_type_proportion,
-            )
-            target_frame = common_target.rename("target_proportion").reset_index()
-            target_frame.columns = ["cell_type", "target_proportion"]
-            target_frame["target_cells"] = integer_quotas(common_target, args.target_cells).reindex(target_frame.cell_type).to_numpy()
-            atomic_csv(target_frame, target_path)
-        print("Universal target cell types:", len(common_target), flush=True)
-        print(target_frame.to_string(index=False), flush=True)
-
     configuration = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "experiment": args.experiment,
@@ -387,8 +329,6 @@ def main():
         "gene_cell_fraction": args.gene_cell_fraction,
         "minimum_state_count": args.minimum_state_count,
         "cell_type_key": args.cell_type_key,
-        "minimum_common_type_cells": args.minimum_common_type_cells,
-        "minimum_common_type_proportion": args.minimum_common_type_proportion,
         "graph_estimator": "raw binary plug-in mutual information",
         "spectral_statistic": "exact-center O_lambda with one Perron mode removed",
         "gene_universe": "target patient's native full-depth two-state gene set",
@@ -430,12 +370,7 @@ def main():
                 native_counts = pd.Series(patient_labels).value_counts()
                 native_target = (native_counts / native_counts.sum()).to_dict()
 
-                if args.experiment == "cell-type-standardized":
-                    missing_types = sorted(
-                        cell_type for cell_type in common_target.index
-                        if not np.any(patient_labels == cell_type)
-                    )
-                elif args.experiment == "pooled-synthetic":
+                if args.experiment == "pooled-synthetic":
                     pool_blocks = [
                         donor_rows for donor, donor_rows in rows_by_patient.items()
                         if donor != patient
@@ -524,13 +459,6 @@ def main():
                                 rows, args.target_cells, rng
                             )
                             target = native_target
-                            selected_expression = read_rows(source, selected_rows)
-                        elif args.experiment == "cell-type-standardized":
-                            selected_rows, weights, donor_counts = cell_type_standardized(
-                                rows, patient_labels, common_target.to_dict(),
-                                args.target_cells, rng,
-                            )
-                            target = common_target.to_dict()
                             selected_expression = read_rows(source, selected_rows)
                         else:
                             selected_rows, weights, donor_counts = pooled_synthetic(

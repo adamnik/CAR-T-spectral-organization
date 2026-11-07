@@ -96,6 +96,21 @@ python estimate_tcat_correlations.py \
 
 The primary outputs are posterior summaries for all pairwise TCAT correlations and all O-lambda–TCAT correlations. Complete posterior draws can optionally be retained with `--save-draws`.
 
+## Reconstruction of spectral organization
+
+`reconstruct_olambda_from_cell_states.py` tests how much asymptotic and patient-bootstrap O-lambda can be reconstructed from TCAT GEPs, Atlas cell-type proportions, or both representations together. Ridge regression, elastic net, partial least squares, and shallow gradient boosting are evaluated with repeated patient-held-out cross-validation and nested hyperparameter selection. Every fold retains patients from every represented dataset. Dataset means are learned from the training fold only, and models are fit to `log(O_lambda - 1)`.
+
+```bash
+python reconstruct_olambda_from_cell_states.py \
+  all_patient_TCAT_estimates.csv \
+  patient_atlas_estimates.csv \
+  patient_olambda_asymptotes.csv \
+  patient_bootstrap_olambda_replicates.csv \
+  results/olambda_reconstruction
+```
+
+The primary outputs are cross-validated predictions and dataset-stratified uncertainty intervals for $R^2$ and Spearman correlation. This is a patient-held-out reconstruction analysis, not leave-one-dataset-out transfer.
+
 `plot_tcat_correlation_matrices.py` creates separate GEP and cell-type figures. Each Bayesian correlation matrix is followed by perfectly aligned rows showing correlation with asymptotic O-lambda and the continuous survival effect on the symmetric log2 hazard-ratio scale. TCAT–TCAT and O-lambda–TCAT correlations share one `[-1, 1]` color scale; the hazard-ratio row retains its own scale.
 
 ```bash
@@ -269,7 +284,7 @@ Patient-level checkpoints make the extraction resumable. Increasing `--point-mul
 
 ## O-lambda sampling sensitivities
 
-`extract_olambda_sensitivity.py` generates fixed-depth products for three outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`.
+`extract_olambda_sensitivity.py` generates fixed-depth products for two outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`.
 
 ```bash
 python extract_olambda_sensitivity.py \
@@ -279,16 +294,11 @@ python extract_olambda_sensitivity.py \
 
 python extract_olambda_sensitivity.py \
   dataset_manifest.csv \
-  results/cell_type_standardized \
-  --experiment cell-type-standardized
-
-python extract_olambda_sensitivity.py \
-  dataset_manifest.csv \
   results/pooled_synthetic \
   --experiment pooled-synthetic
 ```
 
-Each analysis draws 25 products of 10,000 cells by default. The patient bootstrap draws Dirichlet cell weights and then samples a posterior-predictive product. The cell-type-standardized analysis gives every patient the same cohort-average cell-type distribution; retained cell types must contribute at least 10 cells to every patient and at least 1% of the average product. The pooled analysis reproduces each target patient's native cell-type distribution from a leave-one-patient-out, within-dataset pool. Source donors are balanced within each cell type, and sampling with replacement is used when a requested quota exceeds the available cells.
+Each analysis draws 25 products of 10,000 cells by default. The patient bootstrap draws Dirichlet cell weights and then samples a posterior-predictive product. The pooled analysis reproduces each target patient's native cell-type distribution from a leave-one-patient-out, within-dataset pool. Source donors are balanced within each cell type, and sampling with replacement is used when a requested quota exceeds the available cells.
 
 The target patient's full-depth two-state gene set is fixed across all replicates. The script then uses the same raw binary plug-in MI graph and exact-center O-lambda calculation as the finite-depth trajectory analysis. Patient-replicate checkpoints make every mode resumable; increasing `--replicates` adds new draws without replacing completed results. Composition, effective-sample-size, duplicate-cell, and pooled-donor audits are saved beside the O-lambda estimates.
 

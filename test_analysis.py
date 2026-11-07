@@ -30,6 +30,7 @@ import fit_olambda_technical_regression as technical_regression
 import fit_tcat_survival as tcat_survival
 import preprocess_h5ad as preprocessing
 import predictive_field as field
+import reconstruct_olambda_from_cell_states as reconstruction
 import run_tcat as tcat
 import survival_model as survival
 
@@ -226,36 +227,15 @@ class AnalysisChecks(unittest.TestCase):
         self.assertEqual(quotas.CD8, 6667)
 
         rows = np.arange(12)
-        labels = np.asarray(['CD4'] * 6 + ['CD8'] * 6)
-        selected, weights, donors = sensitivity.cell_type_standardized(
-            rows, labels, target, 1000, np.random.default_rng(4)
+        selected, weights, donors = sensitivity.patient_bootstrap(
+            rows, 1000, np.random.default_rng(4)
         )
-        realized = pd.Series(labels[selected]).value_counts()
         self.assertEqual(len(selected), 1000)
-        self.assertEqual(realized.CD4, 333)
-        self.assertEqual(realized.CD8, 667)
+        self.assertTrue(np.isin(selected, rows).all())
         self.assertGreater(weights['cell_weight_ess'], 0)
         self.assertEqual(donors, {})
 
-    def test_sensitivity_common_target_and_pooled_draw(self):
-        patients = pd.DataFrame({
-            'Dataset': ['A', 'A', 'A'],
-            'sample_id': ['p1', 'p2', 'p3'],
-        })
-        native = pd.DataFrame([
-            {'Dataset': 'A', 'sample_id': patient, 'cell_type': cell_type,
-             'native_cells': count, 'native_proportion': count / 100}
-            for patient, counts in {
-                'p1': {'CD4': 60, 'CD8': 39, 'rare': 1},
-                'p2': {'CD4': 50, 'CD8': 45, 'rare': 5},
-                'p3': {'CD4': 40, 'CD8': 50, 'rare': 10},
-            }.items()
-            for cell_type, count in counts.items()
-        ])
-        target = sensitivity.common_cell_type_target(patients, native, 10, .01)
-        self.assertEqual(list(target.index), ['CD4', 'CD8'])
-        assert_allclose(target.sum(), 1)
-
+    def test_sensitivity_pooled_draw(self):
         rows_by_patient = {
             'p1': np.arange(0, 6),
             'p2': np.arange(6, 12),
@@ -271,6 +251,20 @@ class AnalysisChecks(unittest.TestCase):
         self.assertEqual(set(donor_counts), {'p2', 'p3'})
         self.assertLessEqual(abs(donor_counts['p2'] - donor_counts['p3']), 2)
         self.assertGreater(weights['cell_weight_ess'], 0)
+
+    def test_reconstruction_dataset_adjustment(self):
+        data = pd.DataFrame({
+            'Dataset': ['A', 'A', 'B', 'B'],
+            'feature': [1., 3., 10., 14.],
+        })
+        target = np.array([2., 4., 20., 24.])
+        train_x, test_x, train_y, offsets = reconstruction.centered_geometry(
+            data, data, ['feature'], target
+        )
+        assert_allclose(train_x[:, 0], [-1., 1., -2., 2.])
+        assert_allclose(test_x, train_x)
+        assert_allclose(train_y, [-1., 1., -2., 2.])
+        assert_allclose(offsets, [3., 3., 22., 22.])
 
     def test_extraction_command(self):
         columns = sorted(extraction.ASA_COMPONENTS + extraction.PROLIFERATION_COMPONENTS)
