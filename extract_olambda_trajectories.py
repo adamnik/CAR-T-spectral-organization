@@ -24,7 +24,7 @@ RESULT_COLUMNS = [
     "n_cells_available", "depth_fraction", "schedule_rank", "is_full_reference",
     "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
     "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
-    "O_lambda", "spectral_gap", "kemeny_constant",
+    "O_lambda", "spectral_gap", "kemeny_constant", "normalized_kemeny_constant",
     "n_nodes_input", "n_nodes_used", "n_isolates_removed",
     "graph_density", "mean_nonzero_mi_weight",
     "n_eigenvalues_near_one",
@@ -39,6 +39,7 @@ METRIC_COLUMNS = {
     "olambda": "O_lambda",
     "spectral-gap": "spectral_gap",
     "kemeny": "kemeny_constant",
+    "normalized-kemeny": "normalized_kemeny_constant",
 }
 
 
@@ -224,12 +225,19 @@ def spectral_graph_statistics(graph, metrics=("olambda",), spectral_epsilon=1e-7
         spectral_gap = float((1 - nontrivial[-1]).clamp_min(0).item())
         values["spectral_gap"] = 0.0 if spectral_gap <= spectral_epsilon else spectral_gap
 
-    if "kemeny" in metrics:
+    if "kemeny" in metrics or "normalized-kemeny" in metrics:
         denominators = 1 - nontrivial
         if bool((denominators <= spectral_epsilon).any().item()):
-            values["kemeny_constant"] = math.inf
+            kemeny = math.inf
         else:
-            values["kemeny_constant"] = float(denominators.reciprocal().sum().item())
+            kemeny = float(denominators.reciprocal().sum().item())
+        if "kemeny" in metrics:
+            values["kemeny_constant"] = kemeny
+        if "normalized-kemeny" in metrics:
+            # The equal-weight complete graph has K=(G-1)^2/G. Dividing by
+            # this reference makes its normalized Kemeny constant equal one.
+            complete_graph_reference = (n_nodes_used - 1) ** 2 / n_nodes_used
+            values["normalized_kemeny_constant"] = kemeny / complete_graph_reference
 
     return values
 
@@ -332,7 +340,7 @@ def main():
         "--metric", action="append", choices=tuple(METRIC_COLUMNS), default=None,
         help=(
             "Spectral metric to record; repeat to collect several from the same graph. "
-            "Choices: olambda, spectral-gap, kemeny. Default: olambda."
+            "Choices: olambda, spectral-gap, kemeny, normalized-kemeny. Default: olambda."
         ),
     )
     parser.add_argument("--replicate", type=int, action="append", default=None)

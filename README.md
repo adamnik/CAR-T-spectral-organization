@@ -295,13 +295,16 @@ Patient-level checkpoints make the extraction resumable. Increasing `--point-mul
 
 ## O-lambda sampling sensitivities
 
-`extract_olambda_sensitivity.py` generates fixed-depth products for two outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`.
+`extract_olambda_sensitivity.py` generates fixed-depth products for two outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`. As in the trajectory collector, repeated `--metric` arguments can request O-lambda, spectral gap, Kemeny's constant, or complete-graph-normalized Kemeny from each bootstrap graph. Normalized Kemeny divides by the equal-weight complete-graph reference \((G-1)^2/G\).
 
 ```bash
 python extract_olambda_sensitivity.py \
   dataset_manifest.csv \
   results/patient_bootstrap \
-  --experiment patient-bootstrap
+  --experiment patient-bootstrap \
+  --metric spectral-gap \
+  --metric kemeny \
+  --metric normalized-kemeny
 
 python extract_olambda_sensitivity.py \
   dataset_manifest.csv \

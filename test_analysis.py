@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
+import torch
 from numpy.testing import assert_allclose, assert_array_equal
 from scipy import sparse
 from scipy.special import logsumexp
@@ -21,6 +22,7 @@ from scipy.stats import t
 
 import extract_tcat_patient_particles as extraction
 import extract_olambda_sensitivity as sensitivity
+import extract_olambda_trajectories as olambda_trajectories
 import extract_string_pseudobulk as pseudobulk
 import estimate_gene_olambda_correlations as gene_correlations
 import estimate_tcat_correlations as correlations
@@ -36,6 +38,16 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_graph_spectral_statistics(self):
+        graph = torch.ones((4, 4), dtype=torch.float64) - torch.eye(4, dtype=torch.float64)
+        values = olambda_trajectories.spectral_graph_statistics(
+            graph, metrics=("olambda", "spectral-gap", "kemeny", "normalized-kemeny")
+        )
+        assert_allclose(values["O_lambda"], 1.0, atol=1e-12)
+        assert_allclose(values["spectral_gap"], 4 / 3, rtol=1e-7)
+        assert_allclose(values["kemeny_constant"], 9 / 4, rtol=1e-7)
+        assert_allclose(values["normalized_kemeny_constant"], 1.0, rtol=1e-7)
+
     def test_technical_covariates_and_particles(self):
         counts = np.array([
             [9., 1., 0.],

@@ -16,7 +16,8 @@ import torch
 
 from analysis_io import safe_name
 from extract_olambda_trajectories import atomic_csv, atomic_json, binary_plugin_mi
-from extract_olambda_trajectories import matrix_to_memory, spectral_organization
+from extract_olambda_trajectories import METRIC_COLUMNS, matrix_to_memory
+from extract_olambda_trajectories import spectral_graph_statistics
 from extract_olambda_trajectories import stable_seed, upsert_csv
 
 
@@ -208,14 +209,15 @@ def save_graph(path, graph, gene_indices, gene_names):
 
 
 @torch.inference_mode()
-def calculate_olambda(expression, gene_indices, gene_names, device, graph_path=None):
+def calculate_spectral_statistics(expression, gene_indices, gene_names, device,
+                                  metrics=("olambda",), graph_path=None):
     started = time.perf_counter()
     graph = binary_plugin_mi(expression[:, gene_indices], device)
     graph_seconds = time.perf_counter() - started
     if graph_path is not None:
         save_graph(graph_path, graph, gene_indices, gene_names)
     spectral_started = time.perf_counter()
-    values = spectral_organization(graph)
+    values = spectral_graph_statistics(graph, metrics=metrics)
     values["graph_seconds"] = graph_seconds
     values["spectral_seconds"] = time.perf_counter() - spectral_started
     values["total_seconds"] = time.perf_counter() - started
@@ -232,9 +234,9 @@ def read_parts(directory):
     return pd.concat(frames, ignore_index=True, sort=False)
 
 
-def rebuild_outputs(output_dir):
+def rebuild_outputs(output_dir, replicate_filename="olambda_sensitivity_replicates.csv"):
     outputs = [
-        ("replicate_parts", "olambda_sensitivity_replicates.csv",
+        ("replicate_parts", replicate_filename,
          ["Dataset", "sample_id", "replicate"]),
         ("composition_parts", "cell_type_composition_audit.csv",
          ["Dataset", "sample_id", "replicate", "cell_type"]),
@@ -264,11 +266,23 @@ def main():
     parser.add_argument("--replicates", type=int, default=25)
     parser.add_argument("--gene-cell-fraction", type=float, default=0.002)
     parser.add_argument("--minimum-state-count", type=int, default=1)
+    parser.add_argument(
+        "--metric", action="append", choices=tuple(METRIC_COLUMNS), default=None,
+        help=(
+            "Spectral metric to record; repeat to collect several from each bootstrap graph. "
+            "Default: olambda."
+        ),
+    )
     parser.add_argument("--dataset", action="append", default=None)
     parser.add_argument("--patient", action="append", default=None)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--save-graphs", action="store_true")
     args = parser.parse_args()
+    metrics = tuple(dict.fromkeys(args.metric or ["olambda"]))
+    replicate_filename = (
+        "olambda_sensitivity_replicates.csv"
+        if metrics == ("olambda",) else "spectral_sensitivity_replicates.csv"
+    )
 
     if not torch.cuda.is_available():
         raise RuntimeError("A CUDA GPU is required for the complete MI graphs.")
@@ -307,6 +321,7 @@ def main():
     print("Experiment:", args.experiment, flush=True)
     print("Target cells:", f"{args.target_cells:,}", flush=True)
     print("Replicates:", args.replicates, flush=True)
+    print("Metrics:", ", ".join(metrics), flush=True)
 
     patients, native_composition = metadata_scan(
         manifest, args.sample_key, args.cell_type_key, args.minimum_patient_cells
@@ -330,11 +345,17 @@ def main():
         "minimum_state_count": args.minimum_state_count,
         "cell_type_key": args.cell_type_key,
         "graph_estimator": "raw binary plug-in mutual information",
-        "spectral_statistic": "exact-center O_lambda with one Perron mode removed",
+        "spectral_statistic": (
+            "exact-center O_lambda with one Perron mode removed"
+            if metrics == ("olambda",)
+            else "requested normalized-adjacency spectral statistics with one Perron mode removed"
+        ),
         "gene_universe": "target patient's native full-depth two-state gene set",
         "random_state": args.random_state,
         "save_graphs": args.save_graphs,
     }
+    if metrics != ("olambda",):
+        configuration["spectral_metrics"] = list(metrics)
     configuration_path = args.output_dir / "sensitivity_configuration.json"
     if configuration_path.exists():
         previous = json.loads(configuration_path.read_text())
@@ -475,11 +496,12 @@ def main():
                         differences = [
                             abs(realized.get(x, 0) - target.get(x, 0)) for x in all_types
                         ]
-                        values = calculate_olambda(
+                        values = calculate_spectral_statistics(
                             selected_expression,
                             genes,
                             np.asarray(data.var_names.astype(str))[genes],
                             device,
+                            metrics,
                             graph_path if args.save_graphs else None,
                         )
                         unique_cells = len(np.unique(selected_rows))
@@ -536,8 +558,12 @@ def main():
                                 "drawn_fraction": count / args.target_cells,
                             } for donor, count in sorted(donor_counts.items())]
                             atomic_csv(pd.DataFrame(donor_rows), donor_dir / name)
+                        metric_text = " | ".join(
+                            f"{METRIC_COLUMNS[metric]}={values[METRIC_COLUMNS[metric]]:.7g}"
+                            for metric in metrics
+                        )
                         print(
-                            f"    O_lambda={values['O_lambda']:.7f} | "
+                            f"    {metric_text} | "
                             f"nodes={values['n_nodes_used']:,} | "
                             f"unique source={unique_cells:,} | "
                             f"time={(time.perf_counter() - started) / 60:.2f} min",
@@ -571,13 +597,13 @@ def main():
                 del patient_expression
                 gc.collect()
                 torch.cuda.empty_cache()
-                rebuild_outputs(args.output_dir)
+                rebuild_outputs(args.output_dir, replicate_filename)
         finally:
             if data.file:
                 data.file.close()
 
-    rebuild_outputs(args.output_dir)
-    print("\nReplicates:", args.output_dir / "olambda_sensitivity_replicates.csv")
+    rebuild_outputs(args.output_dir, replicate_filename)
+    print("\nReplicates:", args.output_dir / replicate_filename)
     print("Cell-type audit:", args.output_dir / "cell_type_composition_audit.csv")
     if args.experiment == "pooled-synthetic":
         print("Donor audit:", args.output_dir / "donor_balance_audit.csv")
