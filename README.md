@@ -268,9 +268,9 @@ Rscript plot_olambda_survival_turnbull.R \
   60 600
 ```
 
-## Finite-depth O-lambda trajectories
+## Finite-depth graph-spectral trajectories
 
-`extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures spectral organization across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates exact-center O-lambda.
+`extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures graph-spectral statistics across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates any requested subset of O-lambda, the normalized-Laplacian spectral gap, and Kemeny's constant. The graph eigendecomposition is shared when several statistics are requested.
 
 ```bash
 python extract_olambda_trajectories.py \
@@ -280,7 +280,18 @@ python extract_olambda_trajectories.py \
   --sample-key sample_id
 ```
 
-Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. The primary output, `olambda_trajectory_points.csv`, can be concatenated across datasets and passed directly to the asymptote model below. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
+Repeat `--metric` to collect multiple statistics from the same graphs. The default remains `olambda` for backward compatibility.
+
+```bash
+python extract_olambda_trajectories.py \
+  processed_dataset_TCAT.h5ad \
+  results/dataset_spectral_benchmarks \
+  --dataset-name DatasetName \
+  --metric spectral-gap \
+  --metric kemeny
+```
+
+Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. O-lambda-only runs retain the primary output `olambda_trajectory_points.csv`; other metric combinations write `spectral_trajectory_points.csv`. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
 
 ## O-lambda sampling sensitivities
 

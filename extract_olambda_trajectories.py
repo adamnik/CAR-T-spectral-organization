@@ -1,4 +1,4 @@
-# Finite-depth O-lambda trajectories from one infusion-product AnnData dataset
+# Finite-depth graph-spectral trajectories from one infusion-product AnnData dataset
 
 import argparse
 import gc
@@ -24,7 +24,8 @@ RESULT_COLUMNS = [
     "n_cells_available", "depth_fraction", "schedule_rank", "is_full_reference",
     "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
     "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
-    "O_lambda", "n_nodes_input", "n_nodes_used", "n_isolates_removed",
+    "O_lambda", "spectral_gap", "kemeny_constant",
+    "n_nodes_input", "n_nodes_used", "n_isolates_removed",
     "graph_density", "mean_nonzero_mi_weight",
     "n_eigenvalues_near_one",
     "largest_eigenvalue",
@@ -33,6 +34,12 @@ RESULT_COLUMNS = [
     "zero_deviation_case", "k_min", "n_genes_after_filter",
     "graph_seconds_including_filter", "spectral_seconds", "total_seconds",
 ]
+
+METRIC_COLUMNS = {
+    "olambda": "O_lambda",
+    "spectral-gap": "spectral_gap",
+    "kemeny": "kemeny_constant",
+}
 
 
 def atomic_csv(frame, path):
@@ -147,8 +154,13 @@ def binary_plugin_mi(expression, device, epsilon=1e-12):
 
 
 @torch.inference_mode()
-def spectral_organization(graph, spectral_epsilon=1e-7,
-                          isolate_epsilon=1e-12, trivial_tolerance=1e-5):
+def spectral_graph_statistics(graph, metrics=("olambda",), spectral_epsilon=1e-7,
+                              isolate_epsilon=1e-12, trivial_tolerance=1e-5):
+    metrics = tuple(dict.fromkeys(metrics))
+    unknown = sorted(set(metrics).difference(METRIC_COLUMNS))
+    if unknown:
+        raise ValueError(f"Unknown spectral metrics: {unknown}")
+
     graph = (graph + graph.T) / 2
     graph.fill_diagonal_(0)
     negative_edges = int((graph < -1e-7).sum().item())
@@ -177,35 +189,62 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
     graph.mul_(inverse_sqrt_degree[None, :])
     eigenvalues = torch.linalg.eigvalsh((graph + graph.T) / 2)
 
-    # Remove exactly one Perron mode and center the remaining relaxation times at one.
+    # Remove exactly one Perron mode. The remaining eigenvalues correspond to
+    # the nonstationary modes of the normalized adjacency / random walk.
     nontrivial = eigenvalues[:-1]
-    center = n_nodes_used / (n_nodes_used - 1)
-    relative_time = center * (1 - nontrivial).clamp_min(spectral_epsilon).reciprocal()
-    weights = (relative_time - 1).square()
-    if float(weights.sum().item()) <= 1e-12:
-        olambda = 1.0
-        zero_deviation = True
-    else:
-        olambda = float((weights * relative_time).sum().div(weights.sum()).item())
-        zero_deviation = False
-
-    return {
-        "O_lambda": olambda,
+    n_eigenvalues_near_one = int((eigenvalues > 1 - trivial_tolerance).sum().item())
+    values = {
         "n_nodes_input": n_nodes_input,
         "n_nodes_used": n_nodes_used,
         "n_isolates_removed": n_nodes_input - n_nodes_used,
         "graph_density": graph_density,
         "mean_nonzero_mi_weight": mean_nonzero_mi_weight,
-        "n_eigenvalues_near_one": int((eigenvalues > 1 - trivial_tolerance).sum().item()),
+        "n_eigenvalues_near_one": n_eigenvalues_near_one,
         "largest_eigenvalue": float(eigenvalues[-1].item()),
         "lambda2_normalized_adjacency": float(nontrivial[-1].item()),
         "smallest_normalized_adjacency_eigenvalue": float(eigenvalues[0].item()),
-        "zero_deviation_case": zero_deviation,
     }
+
+    if "olambda" in metrics:
+        center = n_nodes_used / (n_nodes_used - 1)
+        relative_time = center * (1 - nontrivial).clamp_min(spectral_epsilon).reciprocal()
+        weights = (relative_time - 1).square()
+        if float(weights.sum().item()) <= 1e-12:
+            values["O_lambda"] = 1.0
+            values["zero_deviation_case"] = True
+        else:
+            values["O_lambda"] = float(
+                (weights * relative_time).sum().div(weights.sum()).item()
+            )
+            values["zero_deviation_case"] = False
+
+    if "spectral-gap" in metrics:
+        # This is the Fiedler eigenvalue of the normalized Laplacian:
+        # nu_2 = 1 - lambda_2(S).
+        spectral_gap = float((1 - nontrivial[-1]).clamp_min(0).item())
+        values["spectral_gap"] = 0.0 if spectral_gap <= spectral_epsilon else spectral_gap
+
+    if "kemeny" in metrics:
+        denominators = 1 - nontrivial
+        if bool((denominators <= spectral_epsilon).any().item()):
+            values["kemeny_constant"] = math.inf
+        else:
+            values["kemeny_constant"] = float(denominators.reciprocal().sum().item())
+
+    return values
+
+
+def spectral_organization(graph, spectral_epsilon=1e-7,
+                          isolate_epsilon=1e-12, trivial_tolerance=1e-5):
+    """Backward-compatible O-lambda interface used by the sensitivity analyses."""
+    return spectral_graph_statistics(
+        graph, metrics=("olambda",), spectral_epsilon=spectral_epsilon,
+        isolate_epsilon=isolate_epsilon, trivial_tolerance=trivial_tolerance,
+    )
 
 
 def trajectory_point(expression, order, depth, gene_fraction,
-                     minimum_state_count, device):
+                     minimum_state_count, device, metrics=("olambda",)):
     started = time.perf_counter()
     rows = np.sort(order[:depth])
     selected = expression[rows]
@@ -218,7 +257,7 @@ def trajectory_point(expression, order, depth, gene_fraction,
     graph = binary_plugin_mi(selected[:, genes], device)
     graph_seconds = time.perf_counter() - started
     spectral_started = time.perf_counter()
-    values = spectral_organization(graph)
+    values = spectral_graph_statistics(graph, metrics=metrics)
     spectral_seconds = time.perf_counter() - spectral_started
     del graph, selected
     gc.collect()
@@ -245,18 +284,26 @@ def rebuild_outputs(parts_dir, results_path, summary_path, schedule):
     results = results.reindex(columns=RESULT_COLUMNS)
     atomic_csv(results, results_path)
 
-    summary = results.groupby(['Dataset', 'sample_id', 'trajectory_replicate'], as_index=False).agg(
-        n_cells_available=("n_cells_available", "max"),
-        points_completed=("target_depth", "nunique"),
-        minimum_depth=("target_depth", "min"),
-        maximum_depth=("target_depth", "max"),
-        O_lambda_min=("O_lambda", "min"),
-        O_lambda_max=("O_lambda", "max"),
-    )
+    metric_columns = [
+        column for column in METRIC_COLUMNS.values()
+        if column in results and results[column].notna().any()
+    ]
+    aggregations = {
+        "n_cells_available": ("n_cells_available", "max"),
+        "points_completed": ("target_depth", "nunique"),
+        "minimum_depth": ("target_depth", "min"),
+        "maximum_depth": ("target_depth", "max"),
+    }
+    for column in metric_columns:
+        aggregations[f"{column}_min"] = (column, "min")
+        aggregations[f"{column}_max"] = (column, "max")
+    summary = results.groupby(
+        ['Dataset', 'sample_id', 'trajectory_replicate'], as_index=False
+    ).agg(**aggregations)
     full = results.loc[
         results.is_full_reference.astype(str).str.lower().eq("true"),
-        ["Dataset", "sample_id", "trajectory_replicate", "O_lambda"],
-    ].rename(columns={"O_lambda": "O_lambda_full"})
+        ["Dataset", "sample_id", "trajectory_replicate", *metric_columns],
+    ].rename(columns={column: f"{column}_full" for column in metric_columns})
     summary = summary.merge(
         full.drop_duplicates(keys[:3], keep="last"),
         on=keys[:3], how="left", validate="one_to_one",
@@ -269,7 +316,7 @@ def rebuild_outputs(parts_dir, results_path, summary_path, schedule):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract resumable finite-depth O-lambda trajectories from one infusion AnnData file."
+        description="Extract resumable graph-spectral trajectories from one infusion AnnData file."
     )
     parser.add_argument("input_h5ad", type=Path)
     parser.add_argument("output_dir", type=Path)
@@ -281,11 +328,19 @@ def main():
     parser.add_argument("--point-multiplier", type=float, default=2.0)
     parser.add_argument("--gene-cell-fraction", type=float, default=0.002)
     parser.add_argument("--minimum-state-count", type=int, default=1)
+    parser.add_argument(
+        "--metric", action="append", choices=tuple(METRIC_COLUMNS), default=None,
+        help=(
+            "Spectral metric to record; repeat to collect several from the same graph. "
+            "Choices: olambda, spectral-gap, kemeny. Default: olambda."
+        ),
+    )
     parser.add_argument("--replicate", type=int, action="append", default=None)
     parser.add_argument("--patient", action="append", default=None)
     parser.add_argument("--maximum-patients", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=20261024)
     args = parser.parse_args()
+    metrics = tuple(dict.fromkeys(args.metric or ["olambda"]))
 
     if not torch.cuda.is_available():
         raise RuntimeError("A CUDA GPU is required for the complete MI graphs.")
@@ -296,7 +351,10 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     parts_dir = args.output_dir / "trajectory_parts"
     parts_dir.mkdir(exist_ok=True)
-    results_path = args.output_dir / "olambda_trajectory_points.csv"
+    if metrics == ("olambda",):
+        results_path = args.output_dir / "olambda_trajectory_points.csv"
+    else:
+        results_path = args.output_dir / "spectral_trajectory_points.csv"
     summary_path = args.output_dir / "patient_trajectory_summary.csv"
     schedule_path = args.output_dir / "trajectory_schedule.csv"
     errors_path = args.output_dir / "errors.csv"
@@ -309,6 +367,8 @@ def main():
         "minimum_state_count": args.minimum_state_count,
         "layer": args.layer,
     }
+    if metrics != ("olambda",):
+        estimator["spectral_metrics"] = list(metrics)
     fingerprint = hashlib.sha256(json.dumps(estimator, sort_keys=True).encode()).hexdigest()
     if config_path.exists():
         existing = json.loads(config_path.read_text())
@@ -320,6 +380,7 @@ def main():
     print("GPU:", torch.cuda.get_device_name(0), flush=True)
     print("Input:", args.input_h5ad, flush=True)
     print("Output:", args.output_dir, flush=True)
+    print("Metrics:", ", ".join(metrics), flush=True)
 
     adata = ad.read_h5ad(args.input_h5ad, backed="r")
     try:
@@ -445,7 +506,7 @@ def main():
                     try:
                         values = trajectory_point(
                             expression, order, depth, args.gene_cell_fraction,
-                            args.minimum_state_count, device,
+                            args.minimum_state_count, device, metrics,
                         )
                         result = {
                             "Dataset": args.dataset_name,
@@ -470,9 +531,12 @@ def main():
                             ["Dataset", "sample_id", "trajectory_replicate", "target_depth"],
                         )
                         done.add(depth)
+                        metric_text = " | ".join(
+                            f"{METRIC_COLUMNS[metric]}={values[METRIC_COLUMNS[metric]]:.7g}"
+                            for metric in metrics
+                        )
                         print(
-                            f"      O_lambda={values['O_lambda']:.7f} | "
-                            f"genes={values['n_genes_after_filter']:,} | "
+                            f"      {metric_text} | genes={values['n_genes_after_filter']:,} | "
                             f"time={values['total_seconds'] / 60:.2f} min",
                             flush=True,
                         )
