@@ -27,6 +27,8 @@ import extract_string_pseudobulk as pseudobulk
 import estimate_gene_olambda_correlations as gene_correlations
 import estimate_tcat_correlations as correlations
 import extract_olambda_technical_covariates as technical_covariates
+import analyze_tcat_predictive_field as predictive_analysis
+import compositional_surrogate_field as compositional_field
 import filter_string as string
 import fit_olambda_technical_regression as technical_regression
 import fit_tcat_survival as tcat_survival
@@ -38,6 +40,42 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_asa_component_exclusion(self):
+        features = np.asarray(
+            predictive_analysis.ASA_GEP_FEATURES + ["TCAT_GEP_Treg_CLR"]
+        )
+        excluded = predictive_analysis.excluded_graph_features(
+            "TCAT_SCORE_ASA_CLR", features
+        )
+        self.assertEqual(excluded, sorted(predictive_analysis.ASA_GEP_FEATURES))
+        self.assertEqual(
+            predictive_analysis.excluded_graph_features("O_lambda", features), []
+        )
+
+    def test_compositional_surrogate_fields(self):
+        beta = np.asarray([0.4, -0.2, 0.1])
+        coefficient_scales = np.asarray([2.0, 1.0, 0.5])
+        raw = compositional_field.raw_clr_field(beta, coefficient_scales)
+        assert_allclose(raw.sum(), 0, atol=1e-14)
+
+        regime_scales = np.repeat([[1.0, 2.0, 3.0]], 4, axis=0)
+        transformed = compositional_field.transformed_fields(raw, regime_scales)[0]
+        assert_allclose(regime_scales[0] @ transformed, 0, atol=1e-14)
+
+        for family in compositional_field.SURROGATE_FAMILIES:
+            fields = compositional_field.surrogate_fields(
+                raw, family, 20, random_state=3
+            )
+            assert_allclose(fields.sum(axis=1), 0, atol=1e-14)
+            assert_allclose(
+                np.linalg.norm(fields, axis=1), np.linalg.norm(raw), atol=1e-14
+            )
+
+        unrestricted = compositional_field.regime_field_map(
+            regime_scales, constrained=False
+        )
+        assert_allclose(unrestricted, np.diag([1.0, 2.0, 3.0]))
+
     def test_graph_spectral_statistics(self):
         graph = torch.ones((4, 4), dtype=torch.float64) - torch.eye(4, dtype=torch.float64)
         values = olambda_trajectories.spectral_graph_statistics(

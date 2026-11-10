@@ -134,6 +134,8 @@ Black markers denote posterior directional probability of at least 0.95 for O-la
 
 The primary geometry removes weighted dataset means within every Bayesian-correlation draw; the global geometry is reported as a sensitivity analysis. Each draw samples one coherent TCAT particle per patient and Bayesian-bootstrap patient weights. High- and low-regime matrices use the posterior regime probabilities saved by the corresponding full Bayesian change-point model. Comparator contexts include every GEP with a 95% interval excluding one in either survival model, together with ASA and Proliferation. An individual contextual GEP is removed from its evaluated graph.
 
+ASA is a composite score rather than a graph node. Its four defining GEPs---OX40/EBI3, ICOS/CD38, CTLA4/CD38, and TIMD4/TIM3---are therefore removed from the GEP geometry whenever ASA defines the patient context. This prevents the contextual score from organizing a graph through the same coordinates used to construct it. The removed nodes are recorded in every result row and in the analysis manifest.
+
 ```bash
 python analyze_tcat_predictive_field.py \
   all_patient_TCAT_particles.npz \
@@ -146,6 +148,8 @@ python analyze_tcat_predictive_field.py \
 ```
 
 Regime probabilities are permuted within dataset. The script reports each metric, a descriptive joint standardized contrast, observed regime-specific matrices, comparison-wide false-discovery rates, global-geometry sensitivity, and leave-one-dataset-out stability for O-lambda.
+
+`compositional_surrogate_field.py` provides the constraint-aware sensitivity used for CLR representations. It converts global-standardized clinical coefficients back to raw CLR coefficient coordinates, removes the unidentifiable constant component, maps the field through draw- and regime-specific feature scales, and projects it onto the corresponding standardized CLR tangent space. Coefficient-permutation, sign-randomization, and norm-matched isotropic surrogates are generated in the same raw CLR space and transformed identically. If a contextual coordinate has been removed, the remaining coordinates are unconstrained and retain only the global-to-regime scale transformation.
 
 ## Dataset-cross-fitted clinical fields
 

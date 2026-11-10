@@ -15,6 +15,13 @@ from predictive_field import weighted_correlation
 
 
 SCORE_CONTEXTS = ["TCAT_SCORE_ASA_CLR", "TCAT_SCORE_Proliferation_CLR"]
+ASA_GEP_FEATURES = [
+    "TCAT_GEP_OX40_EBI3_CLR",
+    "TCAT_GEP_ICOS_CD38_CLR",
+    "TCAT_GEP_CTLA4_CD38_CLR",
+    "TCAT_GEP_TIMD4_TIM3_CLR",
+]
+CONTEXT_EXCLUDED_FEATURES = {"TCAT_SCORE_ASA_CLR": ASA_GEP_FEATURES}
 
 
 def load_regime_memberships(regime_dir):
@@ -82,6 +89,14 @@ def selected_contexts(continuous_results, regime_results, regime_memberships,
             "selected_by_regime": feature in regime_significant,
         })
     return contexts, continuous
+
+
+def excluded_graph_features(context, features):
+    features = set(map(str, features))
+    excluded = set(CONTEXT_EXCLUDED_FEATURES.get(str(context), []))
+    if str(context) in features:
+        excluded.add(str(context))
+    return sorted(excluded.intersection(features))
 
 
 def align_analysis(tcat_path, contexts, continuous):
@@ -288,8 +303,9 @@ def main():
     pd.DataFrame(manifest_rows).to_csv(args.output_dir / "context_manifest.csv", index=False)
     started = time.time()
     for context_number, context in enumerate(contexts, start=1):
-        # A contextual GEP does not contribute to its own evaluated graph
-        graph_indices = np.flatnonzero(features != context["context"])
+        excluded = excluded_graph_features(context["context"], features)
+        # A contextual feature, or the GEPs defining a composite score, cannot organize itself
+        graph_indices = np.flatnonzero(~np.isin(features, excluded))
         graph_features = features[graph_indices]
         graph_beta = beta[graph_indices]
         for geometry_number, geometry in enumerate(["dataset_adjusted", "global"]):
@@ -307,6 +323,7 @@ def main():
                 "patients": len(patients),
                 "graph_nodes": len(graph_features),
                 "context_node_excluded": context["context"] in features,
+                "excluded_graph_nodes": ";".join(excluded),
                 "clinical_adverse_tail": "high" if context["adverse_high"] else "low",
                 "effective_adverse_patients": float(context["adverse_membership"].sum()),
                 "HR_median": context["HR_median"],
@@ -401,6 +418,7 @@ def main():
         "permutation": "adverse-regime probabilities shuffled within dataset",
         "correlation_draws": args.correlation_draws,
         "permutations": args.permutations,
+        "composite_context_exclusions": CONTEXT_EXCLUDED_FEATURES,
         "lodo_permutations": args.lodo_permutations,
         "random_state": args.random_state,
         "runtime_minutes": (time.time() - started) / 60,
