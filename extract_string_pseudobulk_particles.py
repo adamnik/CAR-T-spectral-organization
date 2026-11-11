@@ -1,4 +1,4 @@
-# Bayesian-bootstrap patient pseudobulk particles over a shared gene universe
+# Primary Bayesian-bootstrap pseudobulk estimator over a shared gene universe
 
 import argparse
 import json

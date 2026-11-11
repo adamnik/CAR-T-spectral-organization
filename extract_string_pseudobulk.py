@@ -1,4 +1,4 @@
-# Patient pseudobulk expression over the shared STRING gene universe
+# Fixed central pseudobulk reference over the shared STRING gene universe
 
 import argparse
 import json

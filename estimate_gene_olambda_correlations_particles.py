@@ -1,4 +1,4 @@
-# Bayesian partial rank correlations with pseudobulk and O-lambda particles
+# Primary gene associations with pseudobulk and O-lambda particles
 
 import argparse
 import json

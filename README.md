@@ -179,7 +179,7 @@ The cross-fitted field is independent of the held-out outcomes. The primary cros
 
 ## Pseudobulk gene associations and enrichment
 
-`extract_string_pseudobulk.py` constructs a single comparable gene-expression matrix across cohorts. It takes one processed infusion h5ad per dataset, intersects their canonical STRING gene names, sums counts by patient over that exact gene universe, and calculates log2(CPM + 1).
+`extract_string_pseudobulk.py` establishes the shared expression universe and its fixed central estimate. It takes one processed infusion h5ad per dataset, intersects their canonical STRING gene names, sums counts by patient over that exact gene universe, and calculates log2(CPM + 1). The resulting table defines the gene order used by the particle analysis and provides its central-estimate sensitivity.
 
 ```bash
 python extract_string_pseudobulk.py \
@@ -189,20 +189,7 @@ python extract_string_pseudobulk.py \
 
 The manifest has columns `Dataset` and `h5ad_path`. The output contains every shared STRING gene in a common order; genes are not selected using their association with O-lambda.
 
-`estimate_gene_olambda_correlations.py` estimates uncertainty-aware partial Spearman correlations between each shared STRING gene and asymptotic O-lambda. Gene expression and O-lambda are rank transformed. Every draw selects one equal-probability O-lambda particle per patient, draws Bayesian-bootstrap patient weights, and removes dataset fixed effects. The primary gene-association analysis uses dataset adjustment alone; corrected treatment contrasts remain available as an optional sensitivity analysis.
-
-```bash
-python estimate_gene_olambda_correlations.py \
-  results/string_pseudobulk_logCPM.csv \
-  results/olambda_asymptotes/patient_olambda_particles.csv \
-  patient_metadata_with_treatment.csv \
-  results/olambda_gene_associations \
-  --dataset-only
-```
-
-The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
-
-`extract_string_pseudobulk_particles.py` propagates finite-cell uncertainty in pseudobulk expression. For every patient, it draws Bayesian-bootstrap cell weights and recalculates log2(CPM + 1) over the same shared STRING-gene universe. Aggregation is performed in gene blocks for all patients simultaneously, dataset-level checkpoints make the calculation resumable, and the number of particles is a command-line argument.
+`extract_string_pseudobulk_particles.py` is the primary expression estimator. For every patient, it draws Bayesian-bootstrap cell weights and recalculates log2(CPM + 1) over the shared STRING-gene universe. Aggregation is performed in gene blocks for all patients simultaneously, dataset-level checkpoints make the calculation resumable, and the number of particles is a command-line argument.
 
 ```bash
 python extract_string_pseudobulk_particles.py \
@@ -212,7 +199,7 @@ python extract_string_pseudobulk_particles.py \
   --n-particles 16
 ```
 
-`estimate_gene_olambda_correlations_particles.py` combines these expression particles with the existing O-lambda particles. It rank-transforms each coherent whole-cohort expression particle once, then reuses those ranks across association draws. Every draw selects an expression particle, independently selects one O-lambda particle per patient, and applies Bayesian-bootstrap patient weights before dataset adjustment.
+`estimate_gene_olambda_correlations_particles.py` is the primary gene-association model. It combines the expression particles with the existing O-lambda particles, rank-transforms each coherent whole-cohort expression particle once, and reuses those ranks across association draws. Every draw selects an expression particle, independently selects one O-lambda particle per patient, applies Bayesian-bootstrap patient weights, and removes dataset fixed effects.
 
 ```bash
 python estimate_gene_olambda_correlations_particles.py \
@@ -222,14 +209,16 @@ python estimate_gene_olambda_correlations_particles.py \
   results/olambda_gene_associations_particles
 ```
 
-Patients lacking a treatment annotation are not assigned a treatment by inference. The default is to stop; `--drop-missing-treatment` performs a complete-case adjusted analysis and records every omitted patient in `excluded_patients.csv`.
+The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
+
+`estimate_gene_olambda_correlations.py` retains the fixed-pseudobulk version of the same analysis as a central-estimate sensitivity. Its primary sensitivity invocation uses `--dataset-only`; corrected treatment contrasts remain available when explicitly requested. Patients lacking a requested treatment annotation are never assigned one by inference.
 
 `run_fgsea_rankings.R` runs `fgseaMultilevel` against MSigDB Hallmark and Reactome collections and saves both enrichment results and the exact gene-set membership tables used.
 
 ```bash
 Rscript run_fgsea_rankings.R \
-  results/olambda_gene_associations/olambda_gene_GSEA_rank.rnk \
-  results/olambda_gene_associations/fgsea
+  results/olambda_gene_associations_particles/olambda_gene_GSEA_rank.rnk \
+  results/olambda_gene_associations_particles/fgsea
 ```
 
 The Reactome EnrichmentMap is defined using all tested Reactome pathways rather than only significant pathways. `map_reactome_hierarchy.R` maps pathways to the official Reactome hierarchy. `build_reactome_enrichmentmap.R` calculates pathway overlap, applies Markov clustering, and constructs an outcome-independent initial layout. `plot_reactome_enrichment_network.R` refines that layout using similarity-weighted forces, overlays NES and FDR only after the topology is fixed, and generates the matched all-pathway module summary.

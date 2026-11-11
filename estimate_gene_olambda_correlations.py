@@ -1,4 +1,4 @@
-# Bayesian partial rank correlations between pseudobulk genes and O-lambda
+# Fixed-pseudobulk sensitivity for gene associations with O-lambda
 
 import argparse
 import json
