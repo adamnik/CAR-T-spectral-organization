@@ -153,7 +153,7 @@ figure <- ggplot(curve, aes(x = time, y = survival, color = regime, fill = regim
   ) +
   labs(
     x = "Months after infusion",
-    y = "Progression-free survival"
+    y = "Treatment failure survival"
   ) +
   theme_classic(base_size = 12) +
   theme(
