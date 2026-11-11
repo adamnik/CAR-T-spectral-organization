@@ -219,8 +219,7 @@ python estimate_gene_olambda_correlations_particles.py \
   results/string_pseudobulk_particles/patient_pseudobulk_particles.npz \
   results/olambda_asymptotes/patient_olambda_particles.csv \
   patient_metadata.csv \
-  results/olambda_gene_associations_particles \
-  --dataset-only
+  results/olambda_gene_associations_particles
 ```
 
 Patients lacking a treatment annotation are not assigned a treatment by inference. The default is to stop; `--drop-missing-treatment` performs a complete-case adjusted analysis and records every omitted patient in `excluded_patients.csv`.
