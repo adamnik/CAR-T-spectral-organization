@@ -24,7 +24,9 @@ import extract_tcat_patient_particles as extraction
 import extract_olambda_sensitivity as sensitivity
 import extract_olambda_trajectories as olambda_trajectories
 import extract_string_pseudobulk as pseudobulk
+import extract_string_pseudobulk_particles as pseudobulk_particles
 import estimate_gene_olambda_correlations as gene_correlations
+import estimate_gene_olambda_correlations_particles as particle_gene_correlations
 import estimate_tcat_correlations as correlations
 import extract_olambda_technical_covariates as technical_covariates
 import analyze_tcat_predictive_field as predictive_analysis
@@ -40,6 +42,18 @@ import survival_model as survival
 
 
 class AnalysisChecks(unittest.TestCase):
+    def test_pseudobulk_particle_transforms(self):
+        counts = np.asarray([[2., 2.], [0., 4.]])
+        expected = np.log2(1 + np.asarray([[500000., 500000.], [0., 1000000.]]))
+        transformed, library_size = pseudobulk_particles.logcpm(counts)
+        assert_allclose(transformed, expected)
+        assert_allclose(library_size, [4., 4.])
+
+        values = np.asarray([[3., 1.], [1., 2.], [2., 2.]])
+        ranks = particle_gene_correlations.rank_columns(values)
+        assert_allclose(ranks[:, 0], [3., 1., 2.])
+        assert_allclose(ranks[:, 1], [1., 2.5, 2.5])
+
     def test_asa_component_exclusion(self):
         features = np.asarray(
             predictive_analysis.ASA_GEP_FEATURES + ["TCAT_GEP_Treg_CLR"]

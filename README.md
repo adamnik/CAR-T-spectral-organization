@@ -202,6 +202,27 @@ python estimate_gene_olambda_correlations.py \
 
 The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
 
+`extract_string_pseudobulk_particles.py` propagates finite-cell uncertainty in pseudobulk expression. For every patient, it draws Bayesian-bootstrap cell weights and recalculates log2(CPM + 1) over the same shared STRING-gene universe. Aggregation is performed in gene blocks for all patients simultaneously, dataset-level checkpoints make the calculation resumable, and the number of particles is a command-line argument.
+
+```bash
+python extract_string_pseudobulk_particles.py \
+  dataset_manifest.csv \
+  results/string_pseudobulk_logCPM.csv \
+  results/string_pseudobulk_particles \
+  --n-particles 16
+```
+
+`estimate_gene_olambda_correlations_particles.py` combines these expression particles with the existing O-lambda particles. It rank-transforms each coherent whole-cohort expression particle once, then reuses those ranks across association draws. Every draw selects an expression particle, independently selects one O-lambda particle per patient, and applies Bayesian-bootstrap patient weights before dataset adjustment.
+
+```bash
+python estimate_gene_olambda_correlations_particles.py \
+  results/string_pseudobulk_particles/patient_pseudobulk_particles.npz \
+  results/olambda_asymptotes/patient_olambda_particles.csv \
+  patient_metadata.csv \
+  results/olambda_gene_associations_particles \
+  --dataset-only
+```
+
 Patients lacking a treatment annotation are not assigned a treatment by inference. The default is to stop; `--drop-missing-treatment` performs a complete-case adjusted analysis and records every omitted patient in `excluded_patients.csv`.
 
 `run_fgsea_rankings.R` runs `fgseaMultilevel` against MSigDB Hallmark and Reactome collections and saves both enrichment results and the exact gene-set membership tables used.
