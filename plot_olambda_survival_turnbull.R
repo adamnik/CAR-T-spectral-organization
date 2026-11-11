@@ -113,7 +113,7 @@ colors <- c("Low Oλ" = "#2B6CB0", "High Oλ" = "#C43D4D")
 fills <- c("Low Oλ" = "#9EC5E8", "High Oλ" = "#E9A2AA")
 
 annotation <- sprintf(
-  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nCrossover Oλ∞ = %.3f",
+  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nCrossover Oλ = %.3f",
   model_result$HR_median[[1]],
   model_result$HR_q025[[1]],
   model_result$HR_q975[[1]],
