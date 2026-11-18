@@ -1,4 +1,6 @@
-# CAR T-cell spectral organization
+# Spectral analysis of gene-dependency networks reveals emergent organization across scales in CAR T biology
+
+by Adam Nik and Keenan Hartert
 
 Analysis code for spectral organization, cell states, and survival across CAR T-cell infusion cohorts.
 
