@@ -13,8 +13,8 @@ if (length(args) < 4 || length(args) > 7) {
     stop(paste(
         "Usage: Rscript plot_reactome_enrichment_network_prior_layout.R",
         "nodes_with_layout.csv edges.csv modules.csv output_dir",
-        "[displayed|significant|context] [output_stem]",
-        "[current|refined|fr|drl]"
+        "[context] [output_stem]",
+        "[refined]"
     ))
 }
 
@@ -22,26 +22,16 @@ nodes_path <- args[[1]]
 edges_path <- args[[2]]
 modules_path <- args[[3]]
 output_dir <- args[[4]]
-display_mode <- if (length(args) >= 5) args[[5]] else "displayed"
-output_stem <- if (length(args) >= 6) args[[6]] else "reactome_enrichment_network_prior_layout_ggraph"
-layout_mode <- if (length(args) >= 7) args[[7]] else "current"
-if (!display_mode %in% c("displayed", "significant", "context")) {
-    stop("display_mode must be 'displayed', 'significant', or 'context'.")
-}
-if (!layout_mode %in% c("current", "refined", "fr", "drl")) {
-    stop("layout_mode must be 'current', 'refined', 'fr', or 'drl'.")
-}
+if (length(args) >= 5 && args[[5]] != "context") stop("Use the all-pathway context.")
+output_stem <- if (length(args) >= 6) args[[6]] else "olambda_reactome_enrichment"
+if (length(args) >= 7 && args[[7]] != "refined") stop("Use the refined layout.")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 nodes <- read.csv(nodes_path, check.names = FALSE)
 edges <- read.csv(edges_path, check.names = FALSE)
 modules <- read.csv(modules_path, check.names = FALSE)
 
-if (display_mode == "significant") {
-    nodes <- nodes[nodes$significant & is.finite(nodes$x) & is.finite(nodes$y), , drop = FALSE]
-} else {
-    nodes <- nodes[nodes$displayed & is.finite(nodes$x) & is.finite(nodes$y), , drop = FALSE]
-}
+nodes <- nodes[nodes$displayed & is.finite(nodes$x) & is.finite(nodes$y), , drop = FALSE]
 nodes$name <- nodes$pathway
 nodes$significance <- pmin(-log10(pmax(nodes$padj, .Machine$double.xmin)), 25)
 nodes$node_alpha <- ifelse(
@@ -83,22 +73,11 @@ normalize_layout <- function(value) {
 }
 
 set.seed(0)
-if (layout_mode == "refined") {
-    coordinates <- layout_with_fr(
-        graph, coords = coordinates, weights = E(graph)$similarity,
-        niter = 1800, grid = "nogrid"
-    )
-    coordinates <- normalize_layout(coordinates)
-} else if (layout_mode == "fr") {
-    coordinates <- layout_with_fr(
-        graph, weights = E(graph)$similarity,
-        niter = 2400, grid = "nogrid"
-    )
-    coordinates <- normalize_layout(coordinates)
-} else if (layout_mode == "drl") {
-    coordinates <- layout_with_drl(graph, weights = E(graph)$similarity)
-    coordinates <- normalize_layout(coordinates)
-}
+coordinates <- layout_with_fr(
+    graph, coords = coordinates, weights = E(graph)$similarity,
+    niter = 1800, grid = "nogrid"
+)
+coordinates <- normalize_layout(coordinates)
 
 # Module labels must follow the selected layout rather than the coordinates
 # stored by the original packed-module arrangement.
@@ -110,13 +89,11 @@ write.csv(
     row.names = FALSE
 )
 
-if (display_mode %in% c("significant", "context")) {
-    significant_counts <- table(nodes$cluster[nodes$significant])
-    modules <- modules[
-        modules$cluster %in% as.integer(names(significant_counts)[significant_counts >= 6]),
-        , drop = FALSE
-    ]
-}
+significant_counts <- table(nodes$cluster[nodes$significant])
+modules <- modules[
+    modules$cluster %in% as.integer(names(significant_counts)[significant_counts >= 6]),
+    , drop = FALSE
+]
 
 # Replace generic word-frequency labels with pathway-family descriptions.
 label_overrides <- c(
@@ -145,7 +122,7 @@ modules$display_label[replace_labels] <- label_overrides[matched_labels[replace_
 module_labels <- do.call(rbind, lapply(seq_len(nrow(modules)), function(index) {
     group <- modules$cluster[index]
     members <- nodes[nodes$cluster == group, , drop = FALSE]
-    if (display_mode %in% c("significant", "context") && any(members$significant)) {
+    if (any(members$significant)) {
         members <- members[members$significant, , drop = FALSE]
     }
     data.frame(

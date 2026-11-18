@@ -8,8 +8,6 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from analysis_io import safe_name
-
 
 ASA_COMPONENTS = [
     "TCAT_GEP_OX40_EBI3",
@@ -44,26 +42,7 @@ def infer_dataset_name(adata, input_path, requested):
     return input_path.stem
 
 
-def categorical_levels(series, fixed_levels):
-    if fixed_levels is not None:
-        levels = list(map(str, fixed_levels))
-    elif isinstance(series.dtype, pd.CategoricalDtype):
-        levels = list(map(str, series.cat.categories))
-    else:
-        levels = sorted(series.dropna().astype(str).unique())
-    if not levels:
-        raise ValueError(f"No categorical levels were found for {series.name!r}.")
-    observed = set(series.dropna().astype(str))
-    unknown = sorted(observed.difference(levels))
-    if unknown:
-        raise ValueError(
-            f"Column {series.name!r} contains levels absent from its fixed schema: {unknown}"
-        )
-    return levels
-
-
-def patient_features(gep_values, categorical_values, category_schemas,
-                     asa_index, proliferation_index, n_particles, category_pseudocount, rng):
+def patient_features(gep_values, asa_index, proliferation_index, n_particles, rng):
     n_cells = gep_values.shape[0]
     # Use the same bootstrap weights for all features
     cell_weights = rng.dirichlet(np.ones(n_cells), size=n_particles)
@@ -86,14 +65,6 @@ def patient_features(gep_values, categorical_values, category_schemas,
         ]),
     ]
 
-    for column, levels in category_schemas.items():
-        values = categorical_values[column]
-        one_hot = np.column_stack([values == level for level in levels]).astype(float)
-        central_counts = one_hot.sum(axis=0) + category_pseudocount
-        particle_counts = (cell_weights @ one_hot) * n_cells + category_pseudocount
-        central_parts.append(clr(central_counts / central_counts.sum()))
-        particle_parts.append(clr(particle_counts / particle_counts.sum(axis=1, keepdims=True)))
-
     return np.concatenate(central_parts), np.concatenate(particle_parts, axis=1)
 
 
@@ -108,24 +79,8 @@ def main():
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--dataset-name", default=None)
     parser.add_argument("--sample-key", default="sample_id")
-    parser.add_argument(
-        "--categorical-column",
-        action="append",
-        default=None,
-        help=(
-            "Categorical TCAT column to convert to patient proportions. "
-            "May be repeated. By default, TCAT score columns containing 'label' are used."
-        ),
-    )
-    parser.add_argument(
-        "--category-levels-json",
-        type=Path,
-        default=None,
-        help="Optional JSON mapping categorical columns to a fixed list of levels.",
-    )
     parser.add_argument("--minimum-cells", type=int, default=50)
     parser.add_argument("--n-particles", type=int, default=16)
-    parser.add_argument("--category-pseudocount", type=float, default=0.5)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -163,37 +118,8 @@ def main():
     if not np.allclose(gep_values.sum(axis=1), 1.0, atol=1e-4, rtol=0):
         raise ValueError("Cell-level TCAT GEP values do not sum to one.")
 
-    if args.category_levels_json is not None:
-        fixed_category_levels = json.loads(args.category_levels_json.read_text())
-    else:
-        fixed_category_levels = {}
-    if args.categorical_column is None:
-        categorical_columns = sorted(
-            column
-            for column in adata.obs
-            if str(column).startswith("TCAT_SCORE_")
-            and "label" in str(column).lower()
-        )
-    else:
-        categorical_columns = list(dict.fromkeys(args.categorical_column))
-    # Cell-label proportions
-    categorical_frame = pd.DataFrame(index=adata.obs_names)
-    category_schemas = {}
-    for column in categorical_columns:
-        series = adata.obs[column]
-        if series.isna().any():
-            raise ValueError(f"Categorical column {column!r} contains missing values.")
-        levels = categorical_levels(series, fixed_category_levels.get(column))
-        categorical_frame[column] = series.astype(str).to_numpy()
-        category_schemas[column] = levels
-
     feature_names = [f"{column}_CLR" for column in gep_columns]
     feature_names.extend(["TCAT_SCORE_ASA_CLR", "TCAT_SCORE_Proliferation_CLR"])
-    for column, levels in category_schemas.items():
-        feature_names.extend((f'{column}_proportion_{safe_name(level)}_CLR' for level in levels))
-    if len(feature_names) != len(set(feature_names)):
-        raise ValueError("Feature names are not unique after sanitization.")
-
     component_index = {column: index for index, column in enumerate(gep_columns)}
     asa_index = np.asarray([component_index[x] for x in ASA_COMPONENTS])
     proliferation_index = np.asarray([component_index[x] for x in PROLIFERATION_COMPONENTS])
@@ -214,18 +140,11 @@ def main():
         if len(indices) < args.minimum_cells:
             print(f'[{number}/{len(patients)}] {patient}: skipped ({len(indices):,} cells)', flush=True)
             continue
-        patient_categories = {
-            column: categorical_frame[column].to_numpy()[indices]
-            for column in categorical_columns
-        }
         central, particles = patient_features(
             gep_values[indices],
-            patient_categories,
-            category_schemas,
             asa_index,
             proliferation_index,
             args.n_particles,
-            args.category_pseudocount,
             rng,
         )
         central_rows.append(
@@ -284,10 +203,6 @@ def main():
         'ASA_components': ASA_COMPONENTS,
         'Proliferation_components': PROLIFERATION_COMPONENTS,
         'derived_score_aggregation': 'mean of component CLR GEPs',
-        'categorical_columns': categorical_columns,
-        'category_levels': category_schemas,
-        'category_pseudocount': args.category_pseudocount,
-        'category_transform': 'Jeffreys-smoothed patient proportions followed by CLR within each label column',
         'feature_names': feature_names,
         'patients': len(retained_patients),
     }

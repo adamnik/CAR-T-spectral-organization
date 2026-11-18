@@ -271,6 +271,11 @@ def build_cross_fitted_scores(folds, asymptotes, particles, outcomes,
                 "Dataset": record.Dataset,
                 "sample_id": record.sample_id,
                 "n_cells": int(record.n_cells_available),
+                # Average over all transition draws and the patient’s spectral particles.
+                "probability_high": expit(np.clip(
+                    (raw_particles[patient] - transition_crossover[:, None])
+                    / (transition_scale * transition_width), -40, 40
+                )).mean(axis=1).mean(),
                 "continuous": continuous_scores[patient],
                 "transition": transition_scores[patient],
             })
@@ -297,6 +302,11 @@ def build_cross_fitted_scores(folds, asymptotes, particles, outcomes,
             flush=True,
         )
 
+    pd.DataFrame([{
+        "Dataset": row["Dataset"], "sample_id": row["sample_id"],
+        "heldout_dataset": row["Dataset"],
+        "posterior_mean_probability_high": row["probability_high"],
+    } for row in score_rows]).to_csv(output_dir / "crossfit_patient_regime_probabilities.csv", index=False)
     audit = pd.DataFrame(audit_rows)
     audit.to_csv(output_dir / "cross_fitted_score_audit.csv", index=False)
     return score_rows

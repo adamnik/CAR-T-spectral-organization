@@ -1,16 +1,11 @@
-# Held-out evaluation of cross-fitted TCAT clinical fields
-
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from analysis_io import feature_kind
-from analyze_tcat_predictive_field import posterior_median_correlations, posterior_states
-from predictive_field import DESIRED_SIGN, METRICS, field_contrast
-from predictive_field import permutation_summary, permute_within_dataset
+from analysis_io import safe_name
+from predictive_field import combine_folds, field_test, particle_profiles, posterior_states
 
 
 def main():
@@ -31,165 +26,57 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    archive = np.load(args.tcat_particles_npz, allow_pickle=False)
-    feature_names = archive["feature_names"].astype(str)
-    field_features = np.asarray([
-        feature for feature in feature_names
-        if feature_kind(feature).lower() == args.feature_kind
-    ])
-    if not len(field_features):
-        raise ValueError(f"No {args.feature_kind} features were found.")
-    feature_lookup = {feature: index for index, feature in enumerate(feature_names)}
-    field_indices = np.asarray([feature_lookup[feature] for feature in field_features])
-    patients = pd.DataFrame({
-        "Dataset": archive["datasets"].astype(str),
-        "sample_id": archive["patient_ids"].astype(str),
-        "particle_row": np.arange(len(archive["patient_ids"])),
-    })
-    # Full-cohort regimes; only the clinical field is cross-fitted
-    membership = pd.read_csv(args.olambda_regime_membership_csv)[[
-        "Dataset", "sample_id", "posterior_mean_probability_high"
-    ]]
-    patients = patients.merge(
-        membership, on=["Dataset", "sample_id"], how="inner", validate="one_to_one"
+
+    representation, prefix = ('TCAT_GEP', 'TCAT_GEP_') if args.feature_kind == 'gep' else (
+        'atlas_cell_type', 'ATLAS_proportion_'
     )
-    patients = patients.sort_values(['Dataset', 'sample_id']).reset_index(drop=True)
-    rows = patients.particle_row.to_numpy(int)
-    values = np.asarray(archive["values"][rows][:, :, field_indices], dtype=float)
-    particle_weights = np.asarray(archive["particle_weights"][rows], dtype=float)
-    particle_weights /= particle_weights.sum(axis=1, keepdims=True)
-    datasets = patients.Dataset.astype(str).to_numpy()
-    states, bootstrap_weights = posterior_states(
-        values, particle_weights, datasets,
-        args.correlation_draws, args.random_state,
-    )
-    states = states["global"]
-
-    crossfit = pd.read_csv(args.crossfit_results_csv)
-    fold_rows = []
-    fold_null = {}
-    fold_result_path = args.output_dir / "crossfit_predictive_field_by_dataset.csv"
-    null_dir = args.output_dir / "permutation_null_parts"
-    null_dir.mkdir(exist_ok=True)
-    for fold_number, heldout in enumerate(sorted(patients.Dataset.unique()), start=1):
-        index = np.flatnonzero(datasets == heldout)
-        high_probability = patients.loc[index, 'posterior_mean_probability_high'].to_numpy(float)
-        effective_high = high_probability.sum()
-        effective_low = len(index) - effective_high
-        if min(effective_high, effective_low) < args.minimum_effective_regime:
-            print(
-                f"SKIP {heldout}: effective regimes {effective_low:.1f} low, "
-                f"{effective_high:.1f} high", flush=True
-            )
-            continue
-
-        keep = crossfit.heldout_dataset.astype(str).eq(heldout)
-        effects = crossfit.loc[keep].set_index('feature')
-        missing = sorted(set(field_features).difference(effects.index.astype(str)))
-        if missing:
-            raise ValueError(
-                f"Cross-fitted field for {heldout} is missing {len(missing)} features."
-            )
-        beta = np.log(effects.loc[field_features, "HR_median"].to_numpy(float))
-        high, low = posterior_median_correlations(
-            states, bootstrap_weights, high_probability, index
-        )
-        observed = field_contrast(high, low, beta)
-
-        rng = np.random.default_rng(args.random_state + fold_number)
-        null = np.empty((args.permutations, len(METRICS)))
-        group = [np.arange(len(index))]
-        for permutation in range(args.permutations):
-            permuted = permute_within_dataset(high_probability, group, rng)
-            permuted_high, permuted_low = posterior_median_correlations(
-                states, bootstrap_weights, permuted, index
-            )
-            null[permutation] = field_contrast(permuted_high, permuted_low, beta)
-        z, p, joint_z, joint_p, joint_null = permutation_summary(observed, null)
-        fold_null[heldout] = (null, joint_null)
-        row = {
-            "heldout_dataset": heldout,
-            "patients": len(index),
-            "effective_high_patients": effective_high,
-            "effective_low_patients": effective_low,
-            "joint_oriented_z": joint_z,
-            "joint_permutation_p": joint_p,
-        }
-        for metric_index, metric in enumerate(METRICS):
-            row[f"contrast__{metric}"] = observed[metric_index]
-            row[f"z__{metric}"] = z[metric_index]
-            row[f"p__{metric}"] = p[metric_index]
-        fold_rows.append(row)
-        pd.DataFrame(fold_rows).to_csv(fold_result_path, index=False)
-        np.savez_compressed(
-            null_dir / f"{heldout}.npz", null=null, joint_null=joint_null
-        )
-        print(
-            f"[{fold_number}/{patients.Dataset.nunique()}] {heldout} | n={len(index)} | "
-            f"joint z={joint_z:.2f}, p={joint_p:.4g}", flush=True
-        )
-
-    folds = pd.DataFrame(fold_rows)
-    if folds.empty:
-        raise ValueError("No held-out dataset had sufficient effective regime size.")
-    folds.to_csv(fold_result_path, index=False)
-
-    combined_rows = []
-    standardized_null = []
-    for row in folds.itertuples(index=False):
-        null, _ = fold_null[row.heldout_dataset]
-        null_mean = null.mean(axis=0)
-        null_sd = np.maximum(null.std(axis=0, ddof=1), 1e-12)
-        standardized_null.append((null - null_mean) / null_sd * DESIRED_SIGN)
-    # Give each held-out dataset equal weight in the combined test
-    standardized_null = np.stack(standardized_null, axis=0)
-    for metric_index, metric in enumerate(METRICS):
-        observed = np.mean(folds[f'z__{metric}'].to_numpy(float) * DESIRED_SIGN[metric_index])
-        null = standardized_null[:, :, metric_index].mean(axis=0)
-        p = (1 + np.sum(null >= observed)) / (len(null) + 1)
-        combined_rows.append({
-            "metric": metric,
-            "datasets": len(folds),
-            "mean_oriented_z": observed,
-            "permutation_p": p,
-            "datasets_in_expected_direction": int(np.sum(
-                folds[f"contrast__{metric}"].to_numpy(float)
-                * DESIRED_SIGN[metric_index] > 0
-            )),
+    membership = pd.read_csv(args.olambda_regime_membership_csv,
+                             dtype={'Dataset': str, 'sample_id': str, 'heldout_dataset': str})
+    if not membership.Dataset.eq(membership.heldout_dataset).all():
+        raise ValueError('Memberships must come from the fold excluding the patient’s dataset')
+    patients, features, values, weights = particle_profiles(args.tcat_particles_npz, membership, prefix)
+    datasets = patients.Dataset.to_numpy()
+    states, bootstrap = posterior_states(values, weights, datasets, args.correlation_draws, args.random_state)
+    hazards = pd.read_csv(args.crossfit_results_csv)
+    support, results, nulls = [], [], {}
+    bundle_dir = args.output_dir / 'compositional_sensitivity_bundles'
+    for number, heldout in enumerate(sorted(set(datasets)), start=1):
+        indices = np.flatnonzero(datasets == heldout)
+        high = patients.loc[indices, 'posterior_mean_probability_high'].to_numpy(float)
+        if not np.all((0 <= high) & (high <= 1)):
+            raise ValueError(f'Invalid held-out membership in {heldout}')
+        low = 1 - high
+        eligible = min(high.sum(), low.sum()) >= args.minimum_effective_regime
+        support.append({
+            'Dataset': heldout, 'n': len(indices), 'sum_low': low.sum(), 'sum_high': high.sum(),
+            'n_eff_low': low.sum()**2 / (low @ low) if low.any() else 0.,
+            'n_eff_high': high.sum()**2 / (high @ high) if high.any() else 0.,
+            'eligible': eligible,
         })
-    oriented_z = []
-    for _, row in folds.iterrows():
-        for index, metric in enumerate(METRICS):
-            oriented_z.append(row[f'z__{metric}'] * DESIRED_SIGN[index])
-    observed_joint = np.mean(oriented_z)
-    null_joint = standardized_null.mean(axis=(0, 2))
-    combined_rows.append({
-        "metric": "three_metric_joint",
-        "datasets": len(folds),
-        "mean_oriented_z": observed_joint,
-        "permutation_p": (1 + np.sum(null_joint >= observed_joint)) / (len(null_joint) + 1),
-        "datasets_in_expected_direction": int(np.sum(folds.joint_oriented_z.to_numpy(float) > 0)),
-    })
-    combined = pd.DataFrame(combined_rows)
-    combined.to_csv(args.output_dir / "crossfit_predictive_field_combined.csv", index=False)
-
-    manifest = {
-        "validation": "dataset-held-out clinical field",
-        "feature_kind": args.feature_kind,
-        "clinical_field": "posterior-median log-HRs fit without the evaluated dataset",
-        "regime_membership": "full-cohort O-lambda Bayesian change-point probabilities",
-        "geometry": "within held-out dataset",
-        "correlation_draws": args.correlation_draws,
-        "permutations": args.permutations,
-        "minimum_effective_regime": args.minimum_effective_regime,
-        "random_state": args.random_state,
-    }
-    (args.output_dir / "crossfit_predictive_field_manifest.json").write_text(
-        json.dumps(manifest, indent=2)
-    )
-    print("\nCombined cross-fitted validation", flush=True)
-    print(combined.to_string(index=False), flush=True)
+        if not eligible:
+            continue
+        effects = hazards.loc[hazards.heldout_dataset.eq(heldout)].set_index('feature').loc[features]
+        result, nulls[heldout] = field_test(
+            states, bootstrap, high, indices, [np.arange(len(indices))], effects, [],
+            bundle_dir / f'{safe_name(heldout)}__O_lambda.npz',
+            {'representation': representation, 'context': 'O_lambda', 'scope': 'fully_heldout',
+             'heldout_dataset': heldout, 'fold_number': number},
+            args.permutations, args.random_state + number,
+        )
+        results.append(dict(result, representation=representation, heldout_dataset=heldout,
+                            patients=len(indices)))
+        print(heldout, result['joint_oriented_z'], flush=True)
+    pd.DataFrame(support).to_csv(args.output_dir / 'table_s4.csv', index=False)
+    folds = pd.DataFrame(results)
+    folds.to_csv(args.output_dir / 'mean_crossfit_predictive_field_by_dataset.csv', index=False)
+    if len(folds):
+        combined = combine_folds(folds, nulls)
+    else:
+        combined = pd.DataFrame(columns=['metric', 'datasets', 'mean_oriented_z',
+                                         'permutation_p', 'datasets_in_expected_direction'])
+    combined.insert(0, 'representation', representation)
+    combined.to_csv(args.output_dir / 'mean_crossfit_predictive_field_combined.csv', index=False)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

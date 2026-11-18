@@ -8,9 +8,86 @@ import numpy as np
 import pandas as pd
 from scipy.stats import rankdata
 
-from estimate_gene_olambda_correlations import nuisance_design
-from estimate_gene_olambda_correlations import summarize_associations
-from estimate_gene_olambda_correlations import weighted_partial_correlations
+def nuisance_design(metadata, treatment_column):
+    dataset = metadata.Dataset.astype(str)
+    dataset_columns = pd.get_dummies(dataset, prefix="dataset", drop_first=True, dtype=float)
+    arrays = [np.ones(len(metadata), dtype=float)]
+    names = ["Intercept"]
+    for column in dataset_columns:
+        arrays.append(dataset_columns[column].to_numpy(float))
+        names.append(column)
+
+    audit = []
+    if treatment_column is not None:
+        treatment = metadata[treatment_column].astype(str)
+        for dataset_name, group in metadata.groupby("Dataset", observed=True, sort=True):
+            levels = sorted(group[treatment_column].astype(str).unique())
+            if len(levels) < 2:
+                continue
+            reference = levels[0]
+            for level in levels[1:]:
+                label = f"treatment__{dataset_name}__{level}_vs_{reference}"
+                arrays.append(
+                    (dataset.eq(str(dataset_name)) & treatment.eq(level)).to_numpy(float)
+                )
+                names.append(label)
+                audit.append({
+                    "contrast": label,
+                    "level": level,
+                    "reference": reference,
+                    "datasets_with_contrast": str(dataset_name),
+                    "included": True,
+                })
+
+    design = np.column_stack(arrays)
+    if np.linalg.matrix_rank(design) != design.shape[1]:
+        raise ValueError(f"The nuisance design is rank deficient: {names}")
+    return design, names, pd.DataFrame(audit)
+
+
+def weighted_partial_correlations(expression, predictor, design, weights):
+    # Weighted residual correlations, with dataset and treatment removed
+    weighted_X = design * weights[:, None]
+    XtWX = design.T @ weighted_X
+    inv = np.linalg.inv(XtWX)
+
+    XtWY = design.T @ (expression * weights[:, None])
+    ss_genes = np.sum(expression * expression * weights[:, None], axis=0)
+    ss_genes -= np.sum(XtWY * (inv @ XtWY), axis=0)
+
+    XtWy = design.T @ (weights * predictor)
+    residual_y = predictor - design @ (inv @ XtWy)
+    ss_y = np.sum(weights * residual_y**2)
+    cov = residual_y @ (expression * weights[:, None])
+
+    denom = np.sqrt(np.maximum(ss_genes * ss_y, 1e-20))
+    return cov / denom
+
+
+def summarize_associations(genes, draws):
+    mean = draws.mean(axis=0)
+    median = np.median(draws, axis=0)
+    sd = draws.std(axis=0, ddof=1)
+    probability_positive = np.mean(draws > 0, axis=0)
+    probability_negative = np.mean(draws < 0, axis=0)
+    result = pd.DataFrame({
+        "gene": genes,
+        "rho_mean": mean,
+        "rho_median": median,
+        "rho_sd": sd,
+        "rho_q025": np.quantile(draws, 0.025, axis=0),
+        "rho_q975": np.quantile(draws, 0.975, axis=0),
+        "P_rho_gt_0": probability_positive,
+        "P_rho_lt_0": probability_negative,
+        "P_same_direction": np.maximum(probability_positive, probability_negative),
+        "signed_direction_probability": 2.0 * probability_positive - 1.0,
+        "posterior_standardized_effect": mean / np.maximum(sd, 1e-6),
+    })
+    result = result.sort_values(
+        ['posterior_standardized_effect', 'gene'],
+        ascending=[False, True], kind='mergesort',
+    )
+    return result.reset_index(drop=True)
 
 
 def rank_columns(values):

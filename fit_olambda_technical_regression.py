@@ -85,14 +85,11 @@ def load_analysis(estimates_path, technical_particles_path, olambda_particles_pa
     )
 
 
-def standardize(central_x, particle_x, central_y, particle_y, training_rows=None):
-    if training_rows is None:
-        training_rows = np.arange(len(central_y))
-    # Use training patients only when holding out a dataset
-    x_center = central_x[training_rows].mean(axis=0)
-    x_scale = central_x[training_rows].std(axis=0, ddof=1)
-    y_center = central_y[training_rows].mean()
-    y_scale = central_y[training_rows].std(ddof=1)
+def standardize(central_x, particle_x, central_y, particle_y):
+    x_center = central_x.mean(axis=0)
+    x_scale = central_x.std(axis=0, ddof=1)
+    y_center = central_y.mean()
+    y_scale = central_y.std(ddof=1)
     if np.any(~np.isfinite(x_scale)) or np.any(x_scale <= 0) or y_scale <= 0:
         raise ValueError("Every technical covariate and O-lambda must have positive variation.")
     values = {
@@ -110,11 +107,10 @@ def standardize(central_x, particle_x, central_y, particle_y, training_rows=None
     return values, scaling
 
 
-def dataset_arrays(data, rows):
-    observed = data.iloc[rows]
-    datasets = sorted(observed.Dataset.astype(str).unique())
+def dataset_arrays(data):
+    datasets = sorted(data.Dataset.astype(str).unique())
     lookup = {dataset: index for index, dataset in enumerate(datasets)}
-    index = observed.Dataset.astype(str).map(lookup).to_numpy("int32")
+    index = data.Dataset.astype(str).map(lookup).to_numpy("int32")
     return datasets, index
 
 
@@ -176,7 +172,7 @@ def diagnostic_summary(idata, variables):
 def individual_model(feature, feature_index, data, arrays, weights, args, output_dir):
     central_x, particle_x, central_y, particle_y = arrays
     x_weights, y_weights = weights
-    datasets, dataset_index = dataset_arrays(data, np.arange(len(data)))
+    datasets, dataset_index = dataset_arrays(data)
     coordinates = {"dataset": datasets, "observation": np.arange(len(data))}
 
     with pm.Model(coords=coordinates):
@@ -265,21 +261,17 @@ def individual_model(feature, feature_index, data, arrays, weights, args, output
     return result
 
 
-def joint_model(data, feature_names, arrays, weights, args, output_dir,
-                training_rows=None, save_posterior=True, random_state=None):
+def joint_model(data, feature_names, arrays, weights, args, output_dir):
     central_x, particle_x, central_y, particle_y = arrays
     x_weights, y_weights = weights
-    if training_rows is None:
-        training_rows = np.arange(len(data))
-    training_rows = np.asarray(training_rows, dtype=int)
-    datasets, dataset_index = dataset_arrays(data, training_rows)
+    datasets, dataset_index = dataset_arrays(data)
     coordinates = {
         "dataset": datasets,
         "feature": feature_names,
-        "observation": np.arange(len(training_rows)),
+        "observation": np.arange(len(data)),
     }
-    x = particle_x[training_rows]
-    y = particle_y[training_rows]
+    x = particle_x
+    y = particle_y
 
     with pm.Model(coords=coordinates):
         global_intercept, dataset_intercept = intercepts(datasets)
@@ -294,11 +286,11 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
             y,
             predictor_mean,
             residual_sd,
-            y_weights[training_rows],
-            x_weights[training_rows],
+            y_weights,
+            x_weights,
         )
         pm.Potential("regression_loglikelihood", pt.sum(likelihood))
-        centered_x = within_dataset(central_x[training_rows], dataset_index)
+        centered_x = within_dataset(central_x, dataset_index)
         technical_prediction = pt.sum(
             pt.as_tensor_variable(centered_x) * coefficient[None, :],
             axis=1,
@@ -311,7 +303,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
 
         started = time.time()
         idata = pm.sample(
-            **sampling_kwargs(args, args.random_state if random_state is None else random_state)
+            **sampling_kwargs(args, args.random_state)
         )
         elapsed = time.time() - started
 
@@ -338,7 +330,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
         "technical_R2_median": np.median(r2_draws),
         "technical_R2_q025": np.quantile(r2_draws, 0.025),
         "technical_R2_q975": np.quantile(r2_draws, 0.975),
-        "patients": len(training_rows),
+        "patients": len(data),
         "datasets": len(datasets),
         "wall_time_seconds": elapsed,
         **diagnostics,
@@ -348,8 +340,7 @@ def joint_model(data, feature_names, arrays, weights, args, output_dir,
     pd.DataFrame([result]).to_csv(output_dir / "model_result.csv", index=False)
     pd.DataFrame(coefficient_results).to_csv(output_dir / 'coefficient_results.csv', index=False)
     summary.to_csv(output_dir / "posterior_summary.csv")
-    if save_posterior:
-        idata.to_netcdf(output_dir / "posterior.nc")
+    idata.to_netcdf(output_dir / "posterior.nc")
     return result, coefficient_results, idata
 
 
@@ -384,89 +375,6 @@ def run_joint(data, feature_names, arrays, weights, args):
     print(pd.DataFrame(coefficients).to_string(index=False), flush=True)
 
 
-def run_lodo(data, feature_names, original, technical_weights, olambda_weights, args):
-    central_x, particle_x, central_y, particle_y = original
-    root = args.output_dir / "leave_one_dataset_out"
-    root.mkdir(parents=True, exist_ok=True)
-    prediction_rows = []
-    datasets = sorted(data.Dataset.astype(str).unique())
-
-    for fold, heldout in enumerate(datasets):
-        output = root / heldout
-        prediction_path = output / "predictions.csv"
-        print("=" * 100, flush=True)
-        print(f"[{fold + 1}/{len(datasets)}] held-out dataset: {heldout}", flush=True)
-        if prediction_path.exists() and not args.overwrite:
-            print("  completed; loading saved predictions", flush=True)
-            prediction_rows.append(pd.read_csv(prediction_path))
-            continue
-
-        training = np.flatnonzero(data.Dataset.astype(str).to_numpy() != heldout)
-        testing = np.flatnonzero(data.Dataset.astype(str).to_numpy() == heldout)
-        standardized, scaling = standardize(
-            central_x, particle_x, central_y, particle_y,
-            training_rows=training,
-        )
-        arrays = (
-            standardized["central_x"], standardized["particle_x"],
-            standardized["central_y"], standardized["particle_y"],
-        )
-        weights = (technical_weights, olambda_weights)
-        _, _, idata = joint_model(
-            data, feature_names, arrays, weights, args, output,
-            training_rows=training,
-            save_posterior=args.save_lodo_posteriors,
-            random_state=args.random_state + 100 + fold,
-        )
-        intercept = np.asarray(idata.posterior.global_intercept).reshape(-1)
-        coefficients = np.asarray(idata.posterior.coefficient).reshape(-1, len(feature_names))
-        predicted_standardized = (
-            intercept[:, None]
-            + coefficients @ standardized["central_x"][testing].T
-        )
-        predicted = (
-            scaling["y_center"]
-            + scaling["y_scale"] * predicted_standardized
-        )
-        residual_sd = np.asarray(idata.posterior.residual_sd).reshape(-1)
-        rng = np.random.default_rng(args.random_state + 1000 + fold)
-        predictive_standardized = predicted_standardized + rng.normal(
-            size=predicted_standardized.shape
-        ) * residual_sd[:, None]
-        predictive = (
-            scaling["y_center"]
-            + scaling["y_scale"] * predictive_standardized
-        )
-        frame = data.iloc[testing][["Dataset", "sample_id", "n_cells"]].copy()
-        frame["observed_O_lambda_inf"] = central_y[testing]
-        frame["predicted_median"] = np.median(predicted, axis=0)
-        frame["predictive_q025"] = np.quantile(predictive, 0.025, axis=0)
-        frame["predictive_q975"] = np.quantile(predictive, 0.975, axis=0)
-        frame["covered_by_95_interval"] = (
-            (frame.observed_O_lambda_inf >= frame.predictive_q025)
-            & (frame.observed_O_lambda_inf <= frame.predictive_q975)
-        )
-        frame.to_csv(prediction_path, index=False)
-        prediction_rows.append(frame)
-
-    predictions = pd.concat(prediction_rows, ignore_index=True, sort=False)
-    predictions["error"] = predictions.predicted_median - predictions.observed_O_lambda_inf
-    predictions["absolute_error"] = predictions.error.abs()
-    predictions["squared_error"] = predictions.error**2
-    correlation = predictions[["predicted_median", "observed_O_lambda_inf"]].corr().iloc[0, 1]
-    summary = pd.DataFrame([{
-        "patients": len(predictions),
-        "datasets": predictions.Dataset.nunique(),
-        "MAE": predictions.absolute_error.mean(),
-        "RMSE": np.sqrt(predictions.squared_error.mean()),
-        "pearson_r": correlation,
-        "coverage_95": predictions.covered_by_95_interval.mean(),
-    }])
-    predictions.to_csv(root / "lodo_predictions.csv", index=False)
-    summary.to_csv(root / "lodo_summary.csv", index=False)
-    print(summary.to_string(index=False), flush=True)
-
-
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -478,7 +386,7 @@ def main():
     parser.add_argument("technical_particles_npz", type=Path)
     parser.add_argument("olambda_particles_csv", type=Path)
     parser.add_argument("output_dir", type=Path)
-    parser.add_argument('--mode', choices=['individual', 'joint', 'lodo', 'all'], default='all')
+    parser.add_argument('--mode', choices=['individual', 'joint', 'all'], default='all')
     parser.add_argument("--minimum-cells", type=int, default=1000)
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
@@ -486,7 +394,6 @@ def main():
     parser.add_argument("--cores", type=int, default=4)
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
-    parser.add_argument("--save-lodo-posteriors", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -540,9 +447,6 @@ def main():
         run_individual(data, feature_names, arrays, weights, args)
     if args.mode in ["joint", "all"]:
         run_joint(data, feature_names, arrays, weights, args)
-    if args.mode in ["lodo", "all"]:
-        original = (central_x, technical_values, central_y, olambda_values)
-        run_lodo(data, feature_names, original, technical_weights, olambda_weights, args)
 
 
 if __name__ == "__main__":

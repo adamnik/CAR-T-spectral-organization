@@ -10,7 +10,7 @@ if (length(args) < 4) {
     "Usage: Rscript build_reactome_enrichmentmap.R",
     "fgsea_Reactome.csv membership_Reactome.csv",
     "reactome_official_branch_mapping.csv output_dir",
-    "[similarity_threshold] [inflation] [significant|all]"
+    "[similarity_threshold] [inflation] [all]"
   ))
 }
 
@@ -18,12 +18,9 @@ fgsea_path <- args[[1]]
 membership_path <- args[[2]]
 branch_path <- args[[3]]
 output_dir <- args[[4]]
-similarity_threshold <- if (length(args) >= 5) as.numeric(args[[5]]) else 0.375
+similarity_threshold <- if (length(args) >= 5) as.numeric(args[[5]]) else 0.45
 inflation <- if (length(args) >= 6) as.numeric(args[[6]]) else 1.8
-cluster_universe <- if (length(args) >= 7) args[[7]] else "significant"
-if (!cluster_universe %in% c("significant", "all")) {
-  stop("cluster_universe must be either 'significant' or 'all'.")
-}
+if (length(args) >= 7 && args[[7]] != "all") stop("Use the all-pathway graph.")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 blue <- "#2166AC"
@@ -35,11 +32,7 @@ fgsea <- read.csv(fgsea_path, check.names = FALSE)
 membership <- read.csv(membership_path, check.names = FALSE)
 branches <- read.csv(branch_path, check.names = FALSE)
 
-if (cluster_universe == "all") {
-  nodes <- fgsea[is.finite(fgsea$NES), ]
-} else {
-  nodes <- fgsea[!is.na(fgsea$padj) & fgsea$padj < 0.05, ]
-}
+nodes <- fgsea[is.finite(fgsea$NES), ]
 nodes <- nodes[order(nodes$pathway), ]
 nodes$significant <- !is.na(nodes$padj) & nodes$padj < 0.05
 nodes$plot_padj <- ifelse(is.finite(nodes$padj), nodes$padj, 1)
@@ -277,7 +270,7 @@ write.csv(cluster_summary, file.path(output_dir, "reactome_autoannotate_clusters
 
 # A packed spectral layout keeps every retained pathway visible while making
 # the MCL modules legible. Placement within a module follows graph topology;
-# module packing is ordered only by enrichment direction and module size.
+# module positions follow overlap connections and module size.
 local_coordinates <- function(indices) {
   if (length(indices) == 1) return(matrix(c(0, 0), nrow = 1))
   if (length(indices) == 2) return(matrix(c(-0.5, 0, 0.5, 0), ncol = 2, byrow = TRUE))
@@ -484,191 +477,3 @@ if (length(minor_ids)) {
 nodes$x <- coordinates[, 1]
 nodes$y <- coordinates[, 2]
 write.csv(nodes, file.path(output_dir, "reactome_enrichmentmap_nodes_with_layout.csv"), row.names = FALSE)
-
-color_value <- function(value, limit = max(abs(nodes$NES))) {
-  value <- pmax(-limit, pmin(limit, value)) / limit
-  if (value < 0) {
-    rgb(colorRamp(c(blue, "#F7F7F7"))(value + 1), maxColorValue = 255)
-  } else {
-    rgb(colorRamp(c("#F7F7F7", red))(value), maxColorValue = 255)
-  }
-}
-
-wrap_label <- function(x, width = 27) paste(strwrap(x, width = width), collapse = "\n")
-
-png(file.path(output_dir, "reactome_enrichmentmap_autoannotate.png"),
-    width = 4200, height = 2600, res = 300, bg = "white")
-layout(matrix(c(1, 2), nrow = 1), widths = c(1.75, 1))
-
-par(mar = c(1.2, 1.2, 3.7, 0.8), family = "sans", xpd = NA)
-plot.new()
-plot.window(xlim = c(0, 1), ylim = c(0, 1), asp = 1)
-title("Reactome EnrichmentMap", line = 1.3, cex.main = 1.25, font.main = 2)
-mtext("Displayed pathways have at least one retained gene-set-overlap edge", side = 3,
-      line = 0.05, cex = 0.82, col = "#555555")
-
-for (row in seq_len(nrow(edges))) {
-  i <- edges$source[[row]]
-  j <- edges$target[[row]]
-  alpha <- 0.05 + 0.20 * (edges$similarity[[row]] - similarity_threshold) /
-    max(1e-8, 1 - similarity_threshold)
-  segments(nodes$x[[i]], nodes$y[[i]], nodes$x[[j]], nodes$y[[j]],
-           col = adjustcolor("#777777", alpha.f = alpha), lwd = 0.35)
-}
-
-point_sizes <- 0.45 + 0.45 * sqrt(pmin(-log10(pmax(nodes$plot_padj, 1e-50)), 20) / 20)
-display_nodes <- nodes$displayed & is.finite(nodes$x) & is.finite(nodes$y)
-points(nodes$x[display_nodes], nodes$y[display_nodes], pch = 21,
-       bg = vapply(nodes$NES[display_nodes], color_value, character(1)),
-       col = adjustcolor("white", 0.75), lwd = 0.35,
-       cex = point_sizes[display_nodes])
-
-label_clusters <- cluster_summary[cluster_summary$pathways >= 6, ]
-for (row in seq_len(nrow(label_clusters))) {
-  id <- label_clusters$cluster[[row]]
-  indices <- clusters[[as.character(id)]]
-  x <- mean(nodes$x[indices])
-  y <- max(nodes$y[indices]) + 0.026
-  text(x, y, wrap_label(label_clusters$display_label[[row]], 24),
-       cex = 0.52, font = 2, col = dark)
-}
-
-legend_x <- seq(0.38, 0.62, length.out = 101)
-legend_y <- rep(0.035, length(legend_x))
-points(legend_x, legend_y, pch = 15, cex = 0.62,
-       col = vapply(seq(-max(abs(nodes$NES)), max(abs(nodes$NES)), length.out = 101),
-                    color_value, character(1)))
-text(0.36, 0.035, "lower", adj = 1, cex = 0.62, col = "#555555")
-text(0.64, 0.035, "higher", adj = 0, cex = 0.62, col = "#555555")
-text(0.5, 0.012, expression("Normalized enrichment score with " * O[lambda]^infinity),
-     cex = 0.67, col = "#555555")
-
-par(mar = c(1.2, 1.0, 3.7, 1.2), family = "sans", xpd = NA)
-plot.new()
-plot.window(xlim = c(-1.15, 1.15), ylim = c(0.5, nrow(label_clusters) + 0.5))
-title("AutoAnnotate-style module summary", line = 1.3, cex.main = 1.25, font.main = 2)
-mtext("MCL modules labeled by official branch or recurring pathway terms",
-      side = 3, line = 0.05, cex = 0.82, col = "#555555")
-abline(v = 0, col = "#888888", lwd = 0.8)
-
-label_clusters <- label_clusters[order(label_clusters$median_NES), ]
-y <- seq_len(nrow(label_clusters))
-for (row in seq_len(nrow(label_clusters))) {
-  values <- c(label_clusters$q10_NES[[row]], label_clusters$median_NES[[row]],
-              label_clusters$q90_NES[[row]])
-  scaled <- values / max(abs(nodes$NES))
-  segments(scaled[[1]], y[[row]], scaled[[3]], y[[row]], col = "#777777", lwd = 1.2)
-  points(scaled[[2]], y[[row]], pch = 21,
-         bg = color_value(label_clusters$median_NES[[row]]), col = "white",
-         lwd = 0.7, cex = 1.2 + 0.19 * sqrt(label_clusters$pathways[[row]]))
-  if (label_clusters$median_NES[[row]] < 0) {
-    text(1.12, y[[row]], wrap_label(label_clusters$display_label[[row]], 29),
-         adj = 1, cex = 0.62, col = dark)
-  } else {
-    text(-1.12, y[[row]], wrap_label(label_clusters$display_label[[row]], 29),
-         adj = 0, cex = 0.62, col = dark)
-  }
-}
-axis(1, at = c(-1, 0, 1), labels = c("lower", "0", "higher"),
-     tick = FALSE, line = -0.5, cex.axis = 0.7, col.axis = "#555555")
-dev.off()
-
-# -----------------------------------------------------------------------------
-# Standalone module-focused map and summary: clusters with >= 6 pathways
-# -----------------------------------------------------------------------------
-
-map_label_clusters <- cluster_summary[
-  cluster_summary$cluster %in% display_cluster_ids &
-    cluster_summary$pathways >= 6,
-]
-
-png(file.path(output_dir, "reactome_enrichmentmap_modules_ge6.png"),
-    width = 4400, height = 3200, res = 300, bg = "white")
-par(mar = c(1.3, 1.0, 3.7, 1.0), family = "sans", xpd = NA)
-plot.new()
-plot.window(xlim = c(0, 1), ylim = c(0, 1), asp = 1)
-title("Reactome EnrichmentMap", line = 1.3, cex.main = 1.35, font.main = 2)
-mtext("Modules with at least six pathways are labeled; connected smaller modules are retained",
-      side = 3, line = 0.05, cex = 0.86, col = "#555555")
-
-for (row in seq_len(nrow(edges))) {
-  i <- edges$source[[row]]
-  j <- edges$target[[row]]
-  if (!nodes$displayed[[i]] || !nodes$displayed[[j]]) next
-  alpha <- 0.06 + 0.24 * (edges$similarity[[row]] - similarity_threshold) /
-    max(1e-8, 1 - similarity_threshold)
-  segments(nodes$x[[i]], nodes$y[[i]], nodes$x[[j]], nodes$y[[j]],
-           col = adjustcolor("#777777", alpha.f = alpha), lwd = 0.45)
-}
-points(nodes$x[display_nodes], nodes$y[display_nodes], pch = 21,
-       bg = vapply(nodes$NES[display_nodes], color_value, character(1)),
-       col = adjustcolor("white", 0.78), lwd = 0.40,
-       cex = point_sizes[display_nodes])
-
-for (row in seq_len(nrow(map_label_clusters))) {
-  id <- map_label_clusters$cluster[[row]]
-  indices <- clusters[[as.character(id)]]
-  indices <- indices[nodes$displayed[indices]]
-  x <- mean(nodes$x[indices])
-  y <- max(nodes$y[indices]) + 0.024
-  text(x, y, wrap_label(map_label_clusters$display_label[[row]], 26),
-       cex = 0.57, font = 2, col = dark)
-}
-
-legend_x <- seq(0.39, 0.61, length.out = 101)
-points(legend_x, rep(0.018, length(legend_x)), pch = 15, cex = 0.64,
-       col = vapply(seq(-max(abs(nodes$NES)), max(abs(nodes$NES)), length.out = 101),
-                    color_value, character(1)))
-text(0.37, 0.018, "lower", adj = 1, cex = 0.65, col = "#555555")
-text(0.63, 0.018, "higher", adj = 0, cex = 0.65, col = "#555555")
-text(0.5, -0.010, expression("Normalized enrichment score with " * O[lambda]^infinity),
-     cex = 0.69, col = "#555555")
-dev.off()
-
-map_label_clusters <- map_label_clusters[order(map_label_clusters$median_NES), ]
-y <- seq_len(nrow(map_label_clusters))
-png(file.path(output_dir, "reactome_module_annotation_summary_ge6.png"),
-    width = 3400, height = 2800, res = 300, bg = "white")
-par(mar = c(4.0, 18.0, 4.2, 1.5), family = "sans")
-plot.new()
-plot.window(
-  xlim = c(min(map_label_clusters$q10_NES) - 0.15,
-           max(map_label_clusters$q90_NES) + 0.15),
-  ylim = c(0.4, nrow(map_label_clusters) + 0.6)
-)
-abline(v = 0, col = "#888888", lwd = 0.8)
-segments(map_label_clusters$q10_NES, y, map_label_clusters$q90_NES, y,
-         col = "#777777", lwd = 1.35)
-points(map_label_clusters$median_NES, y, pch = 21,
-       bg = vapply(map_label_clusters$median_NES, color_value, character(1)),
-       col = "white", lwd = 0.7,
-       cex = 1.0 + 0.18 * sqrt(map_label_clusters$pathways))
-axis(1, cex.axis = 0.75, col.axis = "#555555")
-axis(2, at = y,
-     labels = vapply(map_label_clusters$display_label, wrap_label, character(1), width = 35),
-     las = 1, tick = FALSE, cex.axis = 0.68, line = -0.5)
-title("Overlap-defined Reactome modules", cex.main = 1.25, font.main = 2, line = 1.2)
-mtext(if (cluster_universe == "all") {
-        "Only modules containing at least six pathways"
-      } else {
-        "Only modules containing at least six significant pathways"
-      },
-      side = 3, line = 0.1, cex = 0.82, col = "#555555")
-mtext("Median module NES", side = 1, line = 2.4, cex = 0.80)
-dev.off()
-
-write.csv(
-  map_label_clusters,
-  file.path(output_dir, "reactome_modules_ge6.csv"),
-  row.names = FALSE
-)
-
-cat("Reactome pathways in clustering universe:", nrow(nodes), "\n")
-cat("Similarity threshold:", similarity_threshold, "| edges:", nrow(edges), "\n")
-cat("MCL inflation:", inflation, "| clusters:", nrow(cluster_summary),
-    "| iterations:", mcl$iterations, "| delta:", mcl$delta, "\n")
-cat("Clusters with at least 6 pathways:", nrow(label_clusters), "\n")
-print(label_clusters[, c("cluster", "pathways", "median_NES", "dominant_branch",
-                          "branch_purity", "generated_label", "display_label")],
-      row.names = FALSE)
-

@@ -15,7 +15,10 @@ def load_particles(tcat_path, olambda_path):
     tcat = np.load(tcat_path, allow_pickle=False)
     tcat_values = tcat["values"].astype(float)
     tcat_weights = tcat["particle_weights"].astype(float)
-    feature_names = tcat["feature_names"].astype(str)
+    names = tcat["feature_names"].astype(str)
+    keep = ~np.char.startswith(names, "TCAT_SCORE_Multinomial_Label_proportion_")
+    feature_names = names[keep]
+    tcat_values = tcat_values[:, :, keep]
     patients = pd.DataFrame({
         "Dataset": tcat["datasets"].astype(str),
         "sample_id": tcat["patient_ids"].astype(str),

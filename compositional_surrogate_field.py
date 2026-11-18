@@ -1,6 +1,15 @@
 # Constraint-aware clinical fields for CLR predictive geometry
 
+import argparse
+import json
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
+
+from analysis_io import safe_name
+from analyze_cross_system_predictive_field import ASA_GEP_FEATURES
+from predictive_field import METRICS, benjamini_hochberg, combine_folds, permutation_summary
 
 
 SURROGATE_FAMILIES = [
@@ -113,3 +122,152 @@ def projection_diagnostics(feature_sd_by_draw, raw_field):
         "maximum_fraction_field_norm_removed": float(np.max(fractions_removed)),
         "minimum_constraint_direction_cosine": float(np.min(cosines)),
     }
+
+
+def field_metric_matrices(correlation):
+    correlation = np.asarray(correlation, dtype=float)
+    first, second = np.triu_indices(len(correlation), 1)
+    edge = correlation[first, second]
+    weight = edge ** 2
+    sign = np.where(edge < 0, -1.0, 1.0)
+
+    degree = np.zeros(len(correlation), dtype=float)
+    np.add.at(degree, first, weight)
+    np.add.at(degree, second, weight)
+
+    adjacency = np.zeros_like(correlation)
+    adjacency[first, second] = weight * sign
+    adjacency[second, first] = weight * sign
+    laplacian = np.diag(degree) - adjacency
+    return correlation, adjacency, laplacian, degree
+
+
+def field_metrics_batch(correlation, fields):
+    fields = np.atleast_2d(np.asarray(fields, dtype=float))
+    correlation, adjacency, laplacian, degree = field_metric_matrices(correlation)
+
+    field_norm = np.maximum(np.sum(fields ** 2, axis=1), 1e-12)
+    channeling = np.sum((fields @ correlation) * fields, axis=1) / field_norm
+
+    degree_energy = np.maximum(np.sum(fields ** 2 * degree[None, :], axis=1), 1e-12)
+    variation = np.sum((fields @ laplacian) * fields, axis=1) / degree_energy
+
+    neighbor = (fields @ adjacency) / np.maximum(degree[None, :], 1e-12)
+    neighbor_energy = np.maximum(
+        np.sum(neighbor ** 2 * degree[None, :], axis=1), 1e-12
+    )
+    cosine = (
+        np.sum(fields * neighbor * degree[None, :], axis=1)
+        / np.sqrt(degree_energy * neighbor_energy)
+    )
+    return np.column_stack([channeling, variation, cosine])
+
+
+
+def evaluate_fields(path, count, seed, unprojected=False):
+    with np.load(path, allow_pickle=False) as archive:
+        meta = json.loads(str(archive['metadata_json']))
+        beta = archive['clinical_beta']
+        adverse = archive['adverse_mean_correlation']
+        favorable = archive['favorable_mean_correlation']
+        removed = set(archive['removed_coordinates'].astype(str))
+        if meta['representation'] == 'TCAT_GEP' and meta['context'] == 'TCAT_SCORE_ASA_CLR':
+            if removed != set(ASA_GEP_FEATURES) or removed.intersection(archive['feature_names']):
+                raise ValueError('Recompute the ASA geometry with its four component GEPs excluded')
+        constrained = not removed
+        if unprojected:
+            raw = beta
+            high_map = low_map = np.eye(len(beta))
+        else:
+            raw = raw_clr_field(beta, archive['coefficient_feature_scales'], constrained)
+            high_map = regime_field_map(archive['adverse_feature_sd_by_draw'], constrained)
+            low_map = regime_field_map(archive['favorable_feature_sd_by_draw'], constrained)
+
+    observed = (field_metrics_batch(adverse, high_map @ raw)
+                - field_metrics_batch(favorable, low_map @ raw))[0]
+    for i, family in enumerate(SURROGATE_FAMILIES):
+        family_seed = seed + 100 * i
+        if unprojected and family == 'permuted_field':
+            # Notebook 78 permuted each vector separately.
+            rng = np.random.default_rng(family_seed)
+            fields = np.stack([rng.permutation(raw) for _ in range(count)])
+        else:
+            fields = surrogate_fields(raw, family, count, family_seed, constrained and not unprojected)
+        null = (field_metrics_batch(adverse, fields @ high_map.T)
+                - field_metrics_batch(favorable, fields @ low_map.T))
+        z, p, joint_z, joint_p, _ = permutation_summary(observed, null)
+        row = {'representation': meta['representation'], 'context': meta['context'],
+               'heldout_dataset': meta.get('heldout_dataset', ''), 'surrogate_family': family,
+               'joint_oriented_z': joint_z, 'joint_surrogate_p': joint_p}
+        for j, metric in enumerate(METRICS):
+            row[f'contrast__{metric}'] = observed[j]
+            row[f'z__{metric}'] = z[j]
+            row[f'p__{metric}'] = p[j]
+        yield row, null
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Clinical-field specificity and Table S5')
+    parser.add_argument('pooled_dir', type=Path)
+    parser.add_argument('heldout_dir', type=Path, help='Parent of the TCAT_GEP and atlas_cell_type fold outputs')
+    parser.add_argument('output_dir', type=Path)
+    parser.add_argument('--surrogates', type=int, default=10000)
+    parser.add_argument('--random-state', type=int, default=0)
+    args = parser.parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    pooled = []
+    contexts = pd.read_csv(args.pooled_dir / 'selected_contexts.csv').context
+    paths = sorted(args.pooled_dir / 'compositional_sensitivity_bundles' / field / (safe_name(context) + '.npz')
+                   for field in ['TCAT_GEP', 'atlas_cell_type'] for context in contexts)
+    if not paths:
+        raise ValueError('No pooled field bundles')
+    for number, path in enumerate(paths, start=1):
+        seed = args.random_state + 100000 + 1000 * number
+        for row, _ in evaluate_fields(path, args.surrogates, seed):
+            pooled.append(row)
+    pooled = pd.DataFrame(pooled)
+    groups = pooled.groupby(['representation', 'surrogate_family'])
+    for column, output in [('joint_surrogate_p', 'joint_FDR')] + [(f'p__{m}', f'FDR__{m}') for m in METRICS]:
+        pooled[output] = groups[column].transform(benjamini_hochberg)
+    pooled.to_csv(args.output_dir / 'pooled_compositional_surrogate_results.csv', index=False)
+
+    combined_rows = []
+    for representation in ['TCAT_GEP', 'atlas_cell_type']:
+        fold_dir = args.heldout_dir / representation
+        support = pd.read_csv(fold_dir / 'table_s4.csv').sort_values('Dataset')
+        eligible = support.loc[support.eligible, 'Dataset'].tolist()
+        if not eligible:
+            raise ValueError(f'No eligible held-out cohorts for {representation}')
+        for unprojected in [False, True]:
+            fold_rows = []
+            nulls = {family: {} for family in SURROGATE_FAMILIES}
+            for number, dataset in enumerate(eligible, start=1):
+                # Notebook 78 indexed all folds. Notebook 80 indexed eligible folds.
+                fold_number = support.Dataset.tolist().index(dataset) + 1 if unprojected else number
+                seed = args.random_state + 1000 * fold_number
+                path = fold_dir / 'compositional_sensitivity_bundles' / (safe_name(dataset) + '__O_lambda.npz')
+                for row, null in evaluate_fields(path, args.surrogates, seed, unprojected):
+                    fold_rows.append(row)
+                    nulls[row['surrogate_family']][dataset] = null
+            folds = pd.DataFrame(fold_rows)
+            for family, frame in folds.groupby('surrogate_family'):
+                combined = combine_folds(frame, nulls[family], 'surrogate_p')
+                combined['representation'] = representation
+                combined['surrogate_family'] = family
+                combined['unprojected'] = unprojected
+                combined_rows.append(combined)
+    combined = pd.concat(combined_rows, ignore_index=True)
+    combined.to_csv(args.output_dir / 'crossfit_surrogate_combined.csv', index=False)
+
+    keys = ['representation', 'surrogate_family']
+    spectral = pooled.loc[pooled.context.eq('O_lambda'), keys + ['joint_surrogate_p']]
+    joint = combined.loc[~combined.unprojected & combined.metric.eq('three_metric_joint')]
+    table = spectral.merge(joint[keys + ['surrogate_p']], on=keys, validate='one_to_one')
+    if len(table) != 2 * len(SURROGATE_FAMILIES):
+        raise ValueError('Incomplete pooled or held-out O-lambda results')
+    table.rename(columns={'joint_surrogate_p': 'pooled', 'surrogate_p': 'heldout'}).to_csv(
+        args.output_dir / 'table_s5.csv', index=False)
+
+
+if __name__ == '__main__':
+    main()

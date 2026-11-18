@@ -25,11 +25,10 @@ import extract_olambda_sensitivity as sensitivity
 import extract_olambda_trajectories as olambda_trajectories
 import extract_string_pseudobulk as pseudobulk
 import extract_string_pseudobulk_particles as pseudobulk_particles
-import estimate_gene_olambda_correlations as gene_correlations
 import estimate_gene_olambda_correlations_particles as particle_gene_correlations
 import estimate_tcat_correlations as correlations
 import extract_olambda_technical_covariates as technical_covariates
-import analyze_tcat_predictive_field as predictive_analysis
+import analyze_cross_system_predictive_field as predictive_analysis
 import compositional_surrogate_field as compositional_field
 import filter_string as string
 import fit_olambda_technical_regression as technical_regression
@@ -93,11 +92,10 @@ class AnalysisChecks(unittest.TestCase):
     def test_graph_spectral_statistics(self):
         graph = torch.ones((4, 4), dtype=torch.float64) - torch.eye(4, dtype=torch.float64)
         values = olambda_trajectories.spectral_graph_statistics(
-            graph, metrics=("olambda", "spectral-gap", "kemeny", "normalized-kemeny")
+            graph, metrics=("olambda", "spectral-gap", "normalized-kemeny")
         )
         assert_allclose(values["O_lambda"], 1.0, atol=1e-12)
         assert_allclose(values["spectral_gap"], 4 / 3, rtol=1e-7)
-        assert_allclose(values["kemeny_constant"], 9 / 4, rtol=1e-7)
         assert_allclose(values["normalized_kemeny_constant"], 1.0, rtol=1e-7)
 
     def test_technical_covariates_and_particles(self):
@@ -168,7 +166,7 @@ class AnalysisChecks(unittest.TestCase):
         predictor = np.array([1., 2., 3., 4., 5., 6.])
         design = np.column_stack([np.ones(6), [0., 0., 0., 1., 1., 1.]])
         weights = np.repeat(1 / 6, 6)
-        actual = gene_correlations.weighted_partial_correlations(
+        actual = particle_gene_correlations.weighted_partial_correlations(
             expression, predictor, design, weights
         )
         inverse = np.linalg.inv(design.T @ (design * weights[:, None]))
@@ -268,19 +266,14 @@ class AnalysisChecks(unittest.TestCase):
 
     def test_patient_bootstrap(self):
         gep = np.array([[.1, .2, .3, .4], [.4, .3, .2, .1], [.2, .2, .2, .4]])
-        labels = np.array(['CD4', 'CD8', 'CD4'])
-        center, particles = extraction.patient_features(gep, {'label': labels},
-            {'label': ['CD4', 'CD8']}, np.array([0, 1]), np.array([2, 3]), 16, .5,
-            np.random.default_rng(42))
+        center, particles = extraction.patient_features(
+            gep, np.array([0, 1]), np.array([2, 3]), 16, np.random.default_rng(42))
         weights = np.random.default_rng(42).dirichlet(np.ones(3), size=16)
         logged = np.log(weights @ gep)
         expected = logged - logged.mean(axis=1, keepdims=True)
         assert_allclose(particles[:, :4], expected)
         assert_allclose(particles[:, 4], expected[:, :2].mean(axis=1))
         assert_allclose(particles[:, 5], expected[:, 2:].mean(axis=1))
-        counts = weights @ np.column_stack([labels == 'CD4', labels == 'CD8']) * 3 + .5
-        logged = np.log(counts / counts.sum(axis=1, keepdims=True))
-        assert_allclose(particles[:, 6:], logged - logged.mean(axis=1, keepdims=True))
         assert_allclose(center[:4].sum(), 0, atol=1e-14)
 
     def test_sensitivity_cell_sampling(self):
@@ -337,7 +330,7 @@ class AnalysisChecks(unittest.TestCase):
                            index=[f'cell{i}' for i in range(8)])
         obs['sample_id'] = ['p1'] * 4 + ['p2'] * 4
         obs['timepoint'] = 'infusion'
-        obs['TCAT_SCORE_label'] = ['CD4', 'CD8'] * 4
+        obs['TCAT_SCORE_Multinomial_Label'] = ['CD4', 'CD8'] * 4
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             path = directory / 'cells.h5ad'
@@ -349,7 +342,10 @@ class AnalysisChecks(unittest.TestCase):
             frame = pd.read_csv(output / 'tcat_patient_estimates.csv')
             particles = np.load(output / 'tcat_patient_particles.npz')
             self.assertEqual(list(frame.sample_id), ['p1', 'p2'])
-            self.assertEqual(particles['values'].shape, (2, 16, 11))
+            expected = [f'{name}_CLR' for name in columns] + [
+                'TCAT_SCORE_ASA_CLR', 'TCAT_SCORE_Proliferation_CLR']
+            self.assertEqual(particles['feature_names'].tolist(), expected)
+            self.assertEqual(particles['values'].shape, (2, 16, len(expected)))
             assert_allclose(particles['particle_weights'].sum(axis=1), 1)
             manifest = json.loads((output / 'tcat_extraction_manifest.json').read_text())
             self.assertEqual(manifest['patients'], 2)

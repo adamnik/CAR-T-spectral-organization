@@ -79,19 +79,6 @@ gep_names <- c(
   "gdT" = "γδ T"
 )
 
-cell_type_names <- c(
-  "CD4_CM" = "CD4 Central Memory",
-  "CD4_EM" = "CD4 Effector Memory",
-  "CD4_Naive" = "CD4 Naive",
-  "CD8_CM" = "CD8 Central Memory",
-  "CD8_EM" = "CD8 Effector Memory",
-  "CD8_Naive" = "CD8 Naive",
-  "CD8_TEMRA" = "CD8 TEMRA",
-  "MAIT" = "MAIT",
-  "Treg" = "Treg",
-  "gdT" = "γδ T"
-)
-
 display_name <- function(feature, kind) {
   if (kind == "GEP") {
     key <- sub("^TCAT_GEP_", "", feature)
@@ -106,11 +93,10 @@ display_name <- function(feature, kind) {
     }
     return(key)
   }
-  key <- sub("^TCAT_SCORE_Multinomial_Label_proportion_", "", feature)
-  key <- sub("_CLR$", "", key)
-  unname(cell_type_names[[key]])
+  gsub("_", " ", sub("_CLR$", "", sub("^ATLAS_proportion_", "", feature)))
 }
 
+results <- results[!startsWith(results$feature, "TCAT_SCORE_Multinomial_Label_proportion_"), ]
 results$display_name <- mapply(display_name, results$feature, results$feature_kind)
 if (any(is.na(results$display_name))) {
   missing <- results$feature[is.na(results$display_name)]
@@ -119,6 +105,7 @@ if (any(is.na(results$display_name))) {
 
 make_figure <- function(kind, label, height, output_name) {
   frame <- results[results$feature_kind == kind, ]
+  if (!nrow(frame)) return(invisible(NULL))
   frame <- frame[order(frame$HR_median, decreasing = TRUE), ]
   frame$display_name <- factor(frame$display_name, levels = rev(frame$display_name))
   frame$log2_hr <- log2(frame$HR_median)

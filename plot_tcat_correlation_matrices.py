@@ -64,16 +64,6 @@ DISPLAY_NAMES = {
     "TCAT_GEP_gdT_CLR": "γδ T",
     "TCAT_GEP_CD8_EM_CLR": "CD8 Effector Memory",
     "TCAT_GEP_Cytotoxic_CLR": "Cytotoxic",
-    "TCAT_SCORE_Multinomial_Label_proportion_MAIT_CLR": "MAIT",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD4_EM_CLR": "CD4 Effector Memory",
-    "TCAT_SCORE_Multinomial_Label_proportion_Treg_CLR": "Treg",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD4_CM_CLR": "CD4 Central Memory",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD4_Naive_CLR": "CD4 Naive",
-    "TCAT_SCORE_Multinomial_Label_proportion_gdT_CLR": "γδ T",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD8_EM_CLR": "CD8 Effector Memory",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD8_TEMRA_CLR": "CD8 TEMRA",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD8_CM_CLR": "CD8 Central Memory",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD8_Naive_CLR": "CD8 Naive",
 }
 
 
@@ -81,8 +71,7 @@ def feature_label(feature):
     if feature in DISPLAY_NAMES:
         return DISPLAY_NAMES[feature]
     label = (
-        feature.replace("TCAT_GEP_", "")
-        .replace("TCAT_SCORE_Multinomial_Label_proportion_", "")
+        feature.replace("TCAT_GEP_", "").replace("ATLAS_proportion_", "")
         .replace("_CLR", "")
         .replace("_", " ")
     )
@@ -275,9 +264,11 @@ def main():
     survival = pd.read_csv(args.continuous_survival_results_csv)
     groups = {
         "gep": olambda.loc[olambda.feature_kind.eq("GEP"), "feature"].tolist(),
-        "cell_type": olambda.loc[olambda.feature_kind.eq("cell_type"), "feature"].tolist(),
+        "cell_type": olambda.loc[olambda.feature.str.startswith("ATLAS_proportion_"), "feature"].tolist(),
     }
     for group, features in groups.items():
+        if not features:
+            continue
         if group == 'gep':
             title = 'GEP Correlation Matrix'
             size = (15.5, 14.2)

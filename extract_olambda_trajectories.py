@@ -24,7 +24,7 @@ RESULT_COLUMNS = [
     "n_cells_available", "depth_fraction", "schedule_rank", "is_full_reference",
     "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
     "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
-    "O_lambda", "spectral_gap", "kemeny_constant", "normalized_kemeny_constant",
+    "O_lambda",
     "n_nodes_input", "n_nodes_used", "n_isolates_removed",
     "graph_density", "mean_nonzero_mi_weight",
     "n_eigenvalues_near_one",
@@ -38,7 +38,6 @@ RESULT_COLUMNS = [
 METRIC_COLUMNS = {
     "olambda": "O_lambda",
     "spectral-gap": "spectral_gap",
-    "kemeny": "kemeny_constant",
     "normalized-kemeny": "normalized_kemeny_constant",
 }
 
@@ -225,19 +224,16 @@ def spectral_graph_statistics(graph, metrics=("olambda",), spectral_epsilon=1e-7
         spectral_gap = float((1 - nontrivial[-1]).clamp_min(0).item())
         values["spectral_gap"] = 0.0 if spectral_gap <= spectral_epsilon else spectral_gap
 
-    if "kemeny" in metrics or "normalized-kemeny" in metrics:
+    if "normalized-kemeny" in metrics:
         denominators = 1 - nontrivial
         if bool((denominators <= spectral_epsilon).any().item()):
             kemeny = math.inf
         else:
             kemeny = float(denominators.reciprocal().sum().item())
-        if "kemeny" in metrics:
-            values["kemeny_constant"] = kemeny
-        if "normalized-kemeny" in metrics:
-            # The equal-weight complete graph has K=(G-1)^2/G. Dividing by
-            # this reference makes its normalized Kemeny constant equal one.
-            complete_graph_reference = (n_nodes_used - 1) ** 2 / n_nodes_used
-            values["normalized_kemeny_constant"] = kemeny / complete_graph_reference
+        # The equal-weight complete graph has K=(G-1)^2/G. Dividing by
+        # this reference makes its normalized Kemeny constant equal one.
+        complete_graph_reference = (n_nodes_used - 1) ** 2 / n_nodes_used
+        values["normalized_kemeny_constant"] = kemeny / complete_graph_reference
 
     return values
 
@@ -252,7 +248,7 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
 
 
 def trajectory_point(expression, order, depth, gene_fraction,
-                     minimum_state_count, device, metrics=("olambda",)):
+                     minimum_state_count, device):
     started = time.perf_counter()
     rows = np.sort(order[:depth])
     selected = expression[rows]
@@ -265,7 +261,7 @@ def trajectory_point(expression, order, depth, gene_fraction,
     graph = binary_plugin_mi(selected[:, genes], device)
     graph_seconds = time.perf_counter() - started
     spectral_started = time.perf_counter()
-    values = spectral_graph_statistics(graph, metrics=metrics)
+    values = spectral_graph_statistics(graph)
     spectral_seconds = time.perf_counter() - spectral_started
     del graph, selected
     gc.collect()
@@ -336,19 +332,11 @@ def main():
     parser.add_argument("--point-multiplier", type=float, default=2.0)
     parser.add_argument("--gene-cell-fraction", type=float, default=0.002)
     parser.add_argument("--minimum-state-count", type=int, default=1)
-    parser.add_argument(
-        "--metric", action="append", choices=tuple(METRIC_COLUMNS), default=None,
-        help=(
-            "Spectral metric to record; repeat to collect several from the same graph. "
-            "Choices: olambda, spectral-gap, kemeny, normalized-kemeny. Default: olambda."
-        ),
-    )
     parser.add_argument("--replicate", type=int, action="append", default=None)
     parser.add_argument("--patient", action="append", default=None)
     parser.add_argument("--maximum-patients", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=20261024)
     args = parser.parse_args()
-    metrics = tuple(dict.fromkeys(args.metric or ["olambda"]))
 
     if not torch.cuda.is_available():
         raise RuntimeError("A CUDA GPU is required for the complete MI graphs.")
@@ -359,10 +347,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     parts_dir = args.output_dir / "trajectory_parts"
     parts_dir.mkdir(exist_ok=True)
-    if metrics == ("olambda",):
-        results_path = args.output_dir / "olambda_trajectory_points.csv"
-    else:
-        results_path = args.output_dir / "spectral_trajectory_points.csv"
+    results_path = args.output_dir / "olambda_trajectory_points.csv"
     summary_path = args.output_dir / "patient_trajectory_summary.csv"
     schedule_path = args.output_dir / "trajectory_schedule.csv"
     errors_path = args.output_dir / "errors.csv"
@@ -375,8 +360,6 @@ def main():
         "minimum_state_count": args.minimum_state_count,
         "layer": args.layer,
     }
-    if metrics != ("olambda",):
-        estimator["spectral_metrics"] = list(metrics)
     fingerprint = hashlib.sha256(json.dumps(estimator, sort_keys=True).encode()).hexdigest()
     if config_path.exists():
         existing = json.loads(config_path.read_text())
@@ -388,7 +371,6 @@ def main():
     print("GPU:", torch.cuda.get_device_name(0), flush=True)
     print("Input:", args.input_h5ad, flush=True)
     print("Output:", args.output_dir, flush=True)
-    print("Metrics:", ", ".join(metrics), flush=True)
 
     adata = ad.read_h5ad(args.input_h5ad, backed="r")
     try:
@@ -514,7 +496,7 @@ def main():
                     try:
                         values = trajectory_point(
                             expression, order, depth, args.gene_cell_fraction,
-                            args.minimum_state_count, device, metrics,
+                            args.minimum_state_count, device,
                         )
                         result = {
                             "Dataset": args.dataset_name,
@@ -539,12 +521,8 @@ def main():
                             ["Dataset", "sample_id", "trajectory_replicate", "target_depth"],
                         )
                         done.add(depth)
-                        metric_text = " | ".join(
-                            f"{METRIC_COLUMNS[metric]}={values[METRIC_COLUMNS[metric]]:.7g}"
-                            for metric in metrics
-                        )
                         print(
-                            f"      {metric_text} | genes={values['n_genes_after_filter']:,} | "
+                            f"      O_lambda={values['O_lambda']:.7g} | genes={values['n_genes_after_filter']:,} | "
                             f"time={values['total_seconds'] / 60:.2f} min",
                             flush=True,
                         )

@@ -245,7 +245,10 @@ def load_tcat_analysis(estimates_path, particles_path, outcome_path, minimum_cel
     particle_weights = np.asarray(archive["particle_weights"], dtype=float)
     patient_ids = archive["patient_ids"].astype(str)
     datasets = archive["datasets"].astype(str)
-    feature_names = archive["feature_names"].astype(str).tolist()
+    names = archive["feature_names"].astype(str)
+    keep = ~np.char.startswith(names, "TCAT_SCORE_Multinomial_Label_proportion_")
+    feature_names = names[keep].tolist()
+    values = values[:, :, keep]
     n_cells = np.asarray(archive["n_cells"], dtype=int)
 
     particle_index = pd.DataFrame({

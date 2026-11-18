@@ -16,7 +16,7 @@ The asymptote model requires R and `nlme` (`install.packages("nlme")`). The envi
 
 ## Patient-level TCAT extraction
 
-`extract_tcat_patient_particles.py` reads one processed TCAT AnnData dataset and creates outcome-blind patient estimates and Bayesian-bootstrap particles. GEP usages and multinomial cell-label proportions are CLR-transformed. ASA and Proliferation are reconstructed from their predefined component CLR GEPs rather than estimated independently.
+`extract_tcat_patient_particles.py` reads one processed TCAT AnnData dataset and creates outcome-blind patient estimates and Bayesian-bootstrap particles. GEP usages are CLR-transformed. ASA and Proliferation are reconstructed from their predefined component CLR GEPs rather than estimated independently.
 
 ```bash
 python extract_tcat_patient_particles.py \
@@ -26,7 +26,7 @@ python extract_tcat_patient_particles.py \
   --sample-key sample_id
 ```
 
-The script produces `tcat_patient_estimates.csv`, `tcat_patient_uncertainty.csv`, `tcat_patient_particles.npz`, and a complete extraction manifest. Run it independently for each dataset, using a common categorical-level schema when combining cohorts.
+The script produces `tcat_patient_estimates.csv`, `tcat_patient_uncertainty.csv`, `tcat_patient_particles.npz`, and a complete extraction manifest. Run it independently for each dataset.
 
 ## TCAT survival models
 
@@ -50,16 +50,16 @@ python fit_tcat_survival.py \
   --mode joint-gep
 
 python fit_tcat_survival.py \
-  all_patient_TCAT_estimates.csv \
-  all_patient_TCAT_particles.npz \
+  patient_atlas_estimates.csv \
+  patient_atlas_particles.npz \
   clinical_outcomes.csv \
-  results/tcat_joint_cell_type \
+  results/atlas_joint_cell_type \
   --mode joint-cell-type
 ```
 
 The individual models estimate a global effect and hierarchically pooled dataset effects for every GEP, derived score, and cell proportion. Their outputs include the posterior probabilities that all dataset effects are adverse, all are protective, or all share either direction. Individual fits are checkpointed by feature and can be resumed.
 
-The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; cell-label proportions are constrained separately within each label composition. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
+The joint models use learned Gaussian shrinkage across all coefficients. GEPs are fit as one CLR block; atlas phenotype proportions form their own CLR block. A common scale is used within each CLR block so that the compositional zero-sum geometry is retained. Each patient particle represents the complete TCAT landscape, so the joint likelihood propagates correlated finite-cell uncertainty across features.
 
 `plot_tcat_individual_effects.R` displays the independent results separately for GEPs, the two derived scores, and cell-type proportions. Each figure pairs the global hazard ratio and 95% credible interval with the posterior probability that every dataset shares the same effect direction. Hazard ratios use a symmetric log2 scale around one. Internal TCAT identifiers are replaced by readable biological labels; mixed-lineage programs originally named as doublets are labeled as lineage-like programs.
 
@@ -124,62 +124,54 @@ python plot_tcat_correlation_matrices.py \
 
 Black markers denote posterior directional probability of at least 0.95 for O-lambda correlations and a 95% credible interval excluding one for survival effects. The matrix order is determined by average-linkage clustering of the posterior-median correlations.
 
-## Regime-conditioned TCAT predictive fields
+## Figure 5B and pooled regime geometry
 
-`analyze_tcat_predictive_field.py` asks whether Bayesian survival regimes organize the TCAT GEP landscape around its clinical-risk field. The graph contains only TCAT GEPs. Its fixed clinical field is the posterior-median vector of continuous GEP log hazard ratios. Three complementary quantities are evaluated:
-
-- prognostic channeling, the covariance projected along the clinical-risk field;
-- signed graph variation, the disagreement between that field and the signed GEP graph;
-- signed-neighbor cosine, the alignment of each GEP with its clinical neighborhood.
-
-The primary geometry removes weighted dataset means within every Bayesian-correlation draw; the global geometry is reported as a sensitivity analysis. Each draw samples one coherent TCAT particle per patient and Bayesian-bootstrap patient weights. High- and low-regime matrices use the posterior regime probabilities saved by the corresponding full Bayesian change-point model. Comparator contexts include every GEP with a 95% interval excluding one in either survival model, together with ASA and Proliferation. An individual contextual GEP is removed from its evaluated graph.
-
-ASA is a composite score rather than a graph node. Its four defining GEPs---OX40/EBI3, ICOS/CD38, CTLA4/CD38, and TIMD4/TIM3---are therefore removed from the GEP geometry whenever ASA defines the patient context. This prevents the contextual score from organizing a graph through the same coordinates used to construct it. The removed nodes are recorded in every result row and in the analysis manifest.
+Run the pooled analysis with the adjusted continuous and smooth-transition survival results for each representation. Each transition directory contains the per-feature fits under `individual/`. The O-lambda paths point to its adjusted full-cohort transition fit.
 
 ```bash
-python analyze_tcat_predictive_field.py \
-  all_patient_TCAT_particles.npz \
-  results/tcat_individual/individual_results.csv \
-  results/tcat_smooth_regimes/regime_results.csv \
-  results/tcat_smooth_regimes \
-  results/olambda_survival_regimes/patient_regime_probabilities.csv \
-  results/olambda_survival_regimes/model_result.csv \
-  results/tcat_predictive_field
+python analyze_cross_system_predictive_field.py \
+  patient_atlas_particles.npz atlas/continuous/individual_results.csv \
+  atlas/transition/regime_results.csv atlas/transition \
+  all_patient_TCAT_particles.npz tcat/continuous/individual_results.csv \
+  tcat/transition/regime_results.csv tcat/transition \
+  olambda/transition/patient_regime_probabilities.csv olambda/transition/model_result.csv \
+  results/pooled_field
+python plot_regime_field_geometry.py results/pooled_field
 ```
 
-Regime probabilities are permuted within dataset. The script reports each metric, a descriptive joint standardized contrast, observed regime-specific matrices, comparison-wide false-discovery rates, global-geometry sensitivity, and leave-one-dataset-out stability for O-lambda.
+The field uses the arithmetic mean of 500 dataset-adjusted draw-specific correlation matrices per regime. Biological contexts come from transition HR intervals excluding one. The TCAT field omits the contextual GEP itself or the four ASA component GEPs when ASA defines the context. Figure 5B uses the oriented z scores from 10,000 within-dataset membership permutations. The CSV reports one-sided pooled probabilities and their FDR adjustments. The publication uses two-sided pooled probabilities. The plot writes `figure_5b.pdf` and its values in `figure_5b_values.csv`.
 
-`compositional_surrogate_field.py` provides the constraint-aware sensitivity used for CLR representations. It converts global-standardized clinical coefficients back to raw CLR coefficient coordinates, removes the unidentifiable constant component, maps the field through draw- and regime-specific feature scales, and projects it onto the corresponding standardized CLR tangent space. Coefficient-permutation, sign-randomization, and norm-matched isotropic surrogates are generated in the same raw CLR space and transformed identically. If a contextual coordinate has been removed, the remaining coordinates are unconstrained and retain only the global-to-regime scale transformation.
+## Held-out field validation and Tables S4–S5
 
-## Dataset-cross-fitted clinical fields
-
-`fit_tcat_survival_crossfit.py` refits every independent continuous GEP survival model while holding out one complete dataset. It uses the same priors, interval-censored likelihood, patient particles, and dataset-specific baseline hazards as the primary TCAT analysis. The faster validation defaults are two chains with 1,000 tuning and 1,000 posterior iterations. Fits are checkpointed by held-out dataset and GEP; complete posterior objects are omitted unless `--save-posteriors` is requested.
+Run `validate_olambda_survival_crossfit.py` as described below to generate `crossfit_patient_regime_probabilities.csv`. To obtain the training-derived field coefficients, run `fit_tcat_survival_crossfit.py` on each representation, using the study adjustments and the corresponding feature kind.
 
 ```bash
 python fit_tcat_survival_crossfit.py \
-  all_patient_TCAT_estimates.csv \
-  all_patient_TCAT_particles.npz \
-  clinical_outcomes.csv \
-  results/tcat_survival_crossfit \
-  --adjustment Treatment=axicel \
-  --adjustment Disease=lymphoma
-```
+  all_patient_TCAT_estimates.csv all_patient_TCAT_particles.npz clinical_outcomes.csv \
+  tcat/folds --feature-kind gep --adjustment Treatment=axicel --adjustment Disease=lymphoma
+python fit_tcat_survival_crossfit.py \
+  patient_atlas_estimates.csv patient_atlas_particles.npz clinical_outcomes.csv \
+  atlas/folds --feature-kind cell_type --adjustment Treatment=axicel --adjustment Disease=lymphoma
 
-`analyze_tcat_predictive_field_crossfit.py` then evaluates each held-out dataset with the GEP clinical field learned from the other datasets. It reports dataset-specific results and an empirical combined test across the held-out folds.
-
-```bash
 python analyze_tcat_predictive_field_crossfit.py \
-  all_patient_TCAT_particles.npz \
-  results/olambda_survival_regimes/patient_regime_probabilities.csv \
-  results/tcat_survival_crossfit/crossfit_feature_results.csv \
-  results/tcat_predictive_field_crossfit
+  all_patient_TCAT_particles.npz results/olambda_survival_crossfit/crossfit_patient_regime_probabilities.csv \
+  tcat/folds/crossfit_feature_results.csv results/heldout_field/TCAT_GEP --feature-kind gep
+python analyze_tcat_predictive_field_crossfit.py \
+  patient_atlas_particles.npz results/olambda_survival_crossfit/crossfit_patient_regime_probabilities.csv \
+  atlas/folds/crossfit_feature_results.csv results/heldout_field/atlas_cell_type --feature-kind cell_type
+
+python compositional_surrogate_field.py results/pooled_field results/heldout_field results/specificity
 ```
 
-The cross-fitted field is independent of the held-out outcomes. The primary cross-fitted analysis retains the full-cohort O-lambda regime probabilities, so that only the clinical-field transfer—not the regime boundary—is changed across folds.
+Both representations use the same held-out memberships. Each writes `table_s4.csv` with every cohort, both membership sums, Kish effective sample sizes and eligibility. Eligibility requires at least three units of membership in each regime. The field validation standardizes contrasts against 5,000 permutations within each eligible cohort and combines them with equal cohort weights.
+
+The specificity analysis evaluates 10,000 coefficient permutations, sign randomizations and norm-matched isotropic fields per family. It maps CLR coefficients through the regime-specific mean tangent maps for complete compositions. The final `table_s5.csv` contains the unadjusted, one-sided joint probabilities for O-lambda in pooled and held-out analyses. The combined CSV also includes the held-out unprojected sensitivity.
+
+For the pooled atlas sign-randomization test, 14 of the 10,000 joint null statistics are within `1e-12` of the observed statistic. The notebook uses an inclusive upper-tail comparison in floating-point arithmetic. The archived run gave 0.0400 and a local replay of the same bundles gave 0.0414.
 
 ## Pseudobulk gene associations and enrichment
 
-`extract_string_pseudobulk.py` establishes the shared expression universe and its fixed central estimate. It takes one processed infusion h5ad per dataset, intersects their canonical STRING gene names, sums counts by patient over that exact gene universe, and calculates log2(CPM + 1). The resulting table defines the gene order used by the particle analysis and provides its central-estimate sensitivity.
+`extract_string_pseudobulk.py` establishes the shared expression universe and its fixed central estimate. It takes one processed infusion h5ad per dataset, intersects their canonical STRING gene names, sums counts by patient over that exact gene universe, and calculates log2(CPM + 1). The resulting table defines the gene order used by the particle analysis.
 
 ```bash
 python extract_string_pseudobulk.py \
@@ -211,8 +203,6 @@ python estimate_gene_olambda_correlations_particles.py \
 
 The primary GSEA score is the posterior mean partial correlation divided by its posterior standard deviation. The complete variable STRING-gene ranking is written as both CSV and two-column `.rnk` files. No association threshold is applied before enrichment.
 
-`estimate_gene_olambda_correlations.py` retains the fixed-pseudobulk version of the same analysis as a central-estimate sensitivity. Its primary sensitivity invocation uses `--dataset-only`; corrected treatment contrasts remain available when explicitly requested. Patients lacking a requested treatment annotation are never assigned one by inference.
-
 `run_fgsea_rankings.R` runs `fgseaMultilevel` against MSigDB Hallmark and Reactome collections and saves both enrichment results and the exact gene-set membership tables used.
 
 ```bash
@@ -225,15 +215,15 @@ The Reactome EnrichmentMap is defined using all tested Reactome pathways rather 
 
 ```bash
 Rscript map_reactome_hierarchy.R \
-  results/olambda_gene_associations/fgsea/fgsea_Reactome.csv \
+  results/olambda_gene_associations_particles/fgsea/fgsea_Reactome.csv \
   LowerLevelPathway2Topic_Human.txt \
   ReactomePathwaysRelation.txt \
   ReactomePathways.txt \
   results/reactome_official_branch_mapping.csv
 
 Rscript build_reactome_enrichmentmap.R \
-  results/olambda_gene_associations/fgsea/fgsea_Reactome.csv \
-  results/olambda_gene_associations/fgsea/membership_Reactome.csv \
+  results/olambda_gene_associations_particles/fgsea/fgsea_Reactome.csv \
+  results/olambda_gene_associations_particles/fgsea/membership_Reactome.csv \
   results/reactome_official_branch_mapping.csv \
   results/reactome_network \
   0.45 1.8 all
@@ -246,7 +236,7 @@ Rscript plot_reactome_enrichment_network.R \
   context olambda_reactome_enrichment refined
 
 Rscript plot_olambda_hallmark_gsea.R \
-  results/olambda_gene_associations/fgsea/fgsea_Hallmark.csv \
+  results/olambda_gene_associations_particles/fgsea/fgsea_Hallmark.csv \
   results/hallmark
 ```
 
@@ -283,7 +273,7 @@ Rscript plot_olambda_survival_turnbull.R \
 
 ## Finite-depth graph-spectral trajectories
 
-`extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures graph-spectral statistics across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates any requested subset of O-lambda, the normalized-Laplacian spectral gap, and Kemeny's constant. The graph eigendecomposition is shared when several statistics are requested.
+`extract_olambda_trajectories.py` reads one processed infusion-product AnnData dataset and measures graph-spectral statistics across nested, unique-cell subsamples. Each eligible patient contributes approximately \(2\sqrt{N}\) intermediate depths between 50 cells and the full cell count, including explicit 50-, 100-, 150-, and 200-cell anchors. At each depth, genes must occupy both binary states in at least 0.002 of cells. The script then constructs the raw binary plug-in mutual-information graph and calculates O-lambda.
 
 ```bash
 python extract_olambda_trajectories.py \
@@ -293,22 +283,11 @@ python extract_olambda_trajectories.py \
   --sample-key sample_id
 ```
 
-Repeat `--metric` to collect multiple statistics from the same graphs. The default remains `olambda` for backward compatibility.
-
-```bash
-python extract_olambda_trajectories.py \
-  processed_dataset_TCAT.h5ad \
-  results/dataset_spectral_benchmarks \
-  --dataset-name DatasetName \
-  --metric spectral-gap \
-  --metric kemeny
-```
-
-Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. O-lambda-only runs retain the primary output `olambda_trajectory_points.csv`; other metric combinations write `spectral_trajectory_points.csv`. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
+Patient-level checkpoints make the extraction resumable. Increasing `--point-multiplier` adds depths by filling the largest gaps while retaining all completed measurements. The trajectories are saved in `olambda_trajectory_points.csv`. Complete MI graphs are never saved. This calculation requires a CUDA-enabled PyTorch installation; Colab GPU runtimes provide one by default.
 
 ## O-lambda sampling sensitivities
 
-`extract_olambda_sensitivity.py` generates fixed-depth products for two outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`. As in the trajectory collector, repeated `--metric` arguments can request O-lambda, spectral gap, Kemeny's constant, or complete-graph-normalized Kemeny from each bootstrap graph. Normalized Kemeny divides by the equal-weight complete-graph reference \((G-1)^2/G\).
+`extract_olambda_sensitivity.py` generates fixed-depth products for two outcome-blind sensitivity analyses. The input manifest contains one row per processed infusion dataset with columns `Dataset` and `h5ad_path`. Repeated `--metric` arguments can request O-lambda, spectral gap, or complete-graph-normalized Kemeny from each bootstrap graph. Normalized Kemeny divides by the equal-weight complete-graph reference \((G-1)^2/G\).
 
 ```bash
 python extract_olambda_sensitivity.py \
@@ -316,7 +295,6 @@ python extract_olambda_sensitivity.py \
   results/patient_bootstrap \
   --experiment patient-bootstrap \
   --metric spectral-gap \
-  --metric kemeny \
   --metric normalized-kemeny
 
 python extract_olambda_sensitivity.py \
@@ -397,7 +375,7 @@ python extract_olambda_technical_covariates.py \
   results/olambda_technical_covariates
 ```
 
-`fit_olambda_technical_regression.py` regresses latent asymptotic O-lambda on these measurements. Independent models use hierarchically pooled dataset slopes. The joint model uses weak shrinkage across all five coefficients, and the leave-one-dataset-out mode quantifies whether the technical measurements reconstruct O-lambda in unseen cohorts. Independent technical and O-lambda particles are integrated over their Cartesian product.
+`fit_olambda_technical_regression.py` regresses latent asymptotic O-lambda on these measurements. Independent models use hierarchically pooled dataset slopes. The joint model uses weak shrinkage across all five coefficients. Independent technical and O-lambda particles are integrated over their Cartesian product.
 
 ```bash
 python fit_olambda_technical_regression.py \

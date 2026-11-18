@@ -27,9 +27,7 @@ DISPLAY_NAMES = {
     "TCAT_GEP_CD4_Naive_CLR": "CD4 Naive",
     "TCAT_GEP_CTLA4_CD38_CLR": "CTLA4/CD38",
     "TCAT_GEP_CD8_Naive_CLR": "CD8 Naive",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD4_EM_CLR": "CD4 Effector Memory",
     "TCAT_GEP_SOX4_TOX2_CLR": "SOX4/TOX2",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD8_Naive_CLR": "CD8 Naive Proportion",
     "TCAT_GEP_Translation_CLR": "Translation",
     "TCAT_GEP_Heatshock_CLR": "Heat Shock",
     "O_lambda": r"$\mathcal{O}_{\lambda}$",
@@ -44,9 +42,7 @@ LABEL_LAYOUT = {
         "TCAT_GEP_CD4_Naive_CLR": (0.43, 0.82, "left"),
         "TCAT_GEP_CTLA4_CD38_CLR": (1.12, 0.69, "left"),
         "TCAT_GEP_CD8_Naive_CLR": (0.43, 0.75, "left"),
-        "TCAT_SCORE_Multinomial_Label_proportion_CD4_EM_CLR": (1.12, 0.61, "left"),
         "TCAT_GEP_SOX4_TOX2_CLR": (0.43, 0.67, "left"),
-        "TCAT_SCORE_Multinomial_Label_proportion_CD8_Naive_CLR": (0.43, 0.59, "left"),
         "TCAT_GEP_Translation_CLR": (0.43, 0.51, "left"),
         "O_lambda": (1.18, 0.88, "left"),
     },
@@ -57,7 +53,6 @@ LABEL_LAYOUT = {
         "TCAT_GEP_Exhaustion_CLR": (1.43, 0.84, "left"),
         "TCAT_SCORE_ASA_CLR": (2.42, 0.79, "right"),
         "TCAT_GEP_CTLA4_CD38_CLR": (1.43, 0.74, "left"),
-        "TCAT_SCORE_Multinomial_Label_proportion_CD4_EM_CLR": (2.42, 0.66, "right"),
         "O_lambda": (2.42, 0.87, "right"),
     },
 }
@@ -65,7 +60,6 @@ LABEL_LAYOUT = {
 OUTSIDE_REGIME_LABELS = {
     "TCAT_GEP_Th17_Activated_CLR",
     "TCAT_SCORE_ASA_CLR",
-    "TCAT_SCORE_Multinomial_Label_proportion_CD4_EM_CLR",
     "O_lambda",
 }
 
@@ -93,6 +87,7 @@ def read_results(tcat_path, olambda_path):
     if missing:
         raise ValueError(f"TCAT results are missing columns: {sorted(missing)}")
 
+    frame = frame.loc[~frame.feature.str.startswith('TCAT_SCORE_Multinomial_Label_proportion_')]
     frame = frame.rename(
         columns={
             "HR_median": "hr",
@@ -192,13 +187,15 @@ def draw_panel(ax, frame, model):
     )
 
 
-def legend_handles():
-    return [
+def legend_handles(kinds):
+    handles = [
         Line2D([], [], marker="o", linestyle="", markerfacecolor=COLORS["GEP"], markeredgecolor=COLORS["GEP"], label="GEP", markersize=6),
         Line2D([], [], marker="o", linestyle="", markerfacecolor=COLORS["score"], markeredgecolor=COLORS["score"], label="Composite score", markersize=6),
         Line2D([], [], marker="o", linestyle="", markerfacecolor=COLORS["cell_type"], markeredgecolor=COLORS["cell_type"], label="Cell proportion", markersize=6),
         Line2D([], [], marker="o", linestyle="", markerfacecolor=COLORS["O_lambda"], markeredgecolor=COLORS["O_lambda"], label=r"$\mathcal{O}_{\lambda}$", markersize=8.5),
     ]
+    return [handle for kind, handle in zip(["GEP", "score", "cell_type", "O_lambda"], handles)
+            if kind in kinds]
 
 
 def save_figure(frame, model, output_dir, dpi):
@@ -209,7 +206,7 @@ def save_figure(frame, model, output_dir, dpi):
     ax.set_xlabel("Hazard ratio (log scale)")
     ax.set_ylabel("P(all datasets share one direction)")
     fig.legend(
-        handles=legend_handles(), frameon=False, loc="lower center", ncol=4,
+        handles=legend_handles(set(frame.kind)), frameon=False, loc="lower center", ncol=4,
         bbox_to_anchor=(0.43, 0.02),
     )
     fig.text(
