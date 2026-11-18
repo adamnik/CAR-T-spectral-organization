@@ -94,10 +94,11 @@ def main():
         (selected_atlas, args.atlas_regime_dir, 'cell_type'),
     ]:
         for row in table.itertuples(index=False):
-            saved, membership_path = find_membership(directory, str(row.feature))
+            feature = str(row.feature)
+            saved, membership_path = find_membership(directory, feature)
             contexts.append({
-                'context': str(row.feature),
-                'context_kind': ('score' if str(row.feature).startswith('TCAT_SCORE_') else kind),
+                'context': feature,
+                'context_kind': 'score' if feature.startswith('TCAT_SCORE_') else kind,
                 'HR_median': float(saved.HR_median),
                 'HR_q025': float(saved.HR_q025), 'HR_q975': float(saved.HR_q975),
                 'adverse_high': float(saved.HR_median) >= 1,
@@ -154,7 +155,8 @@ def main():
             print(field, name, result['joint_oriented_z'], flush=True)
 
     results = pd.DataFrame(results)
-    results['joint_rank'] = results.groupby('field').joint_oriented_z.rank(ascending=False, method='min').astype(int)
+    joint_scores = results.groupby('field').joint_oriented_z
+    results['joint_rank'] = joint_scores.rank(ascending=False, method='min').astype(int)
     for field, index in results.groupby('field').groups.items():
         index = list(index)
         results.loc[index, 'joint_FDR'] = benjamini_hochberg(
