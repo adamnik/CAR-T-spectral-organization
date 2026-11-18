@@ -183,8 +183,9 @@ def evaluate_fields(path, count, seed, unprojected=False):
             high_map = regime_field_map(archive['adverse_feature_sd_by_draw'], constrained)
             low_map = regime_field_map(archive['favorable_feature_sd_by_draw'], constrained)
 
-    observed = (field_metrics_batch(adverse, high_map @ raw)
-                - field_metrics_batch(favorable, low_map @ raw))[0]
+    adverse_metrics = field_metrics_batch(adverse, high_map @ raw)
+    favorable_metrics = field_metrics_batch(favorable, low_map @ raw)
+    observed = (adverse_metrics - favorable_metrics)[0]
     for i, family in enumerate(SURROGATE_FAMILIES):
         family_seed = seed + 100 * i
         if unprojected and family == 'permuted_field':
@@ -193,8 +194,9 @@ def evaluate_fields(path, count, seed, unprojected=False):
             fields = np.stack([rng.permutation(raw) for _ in range(count)])
         else:
             fields = surrogate_fields(raw, family, count, family_seed, constrained and not unprojected)
-        null = (field_metrics_batch(adverse, fields @ high_map.T)
-                - field_metrics_batch(favorable, fields @ low_map.T))
+        adverse_metrics = field_metrics_batch(adverse, fields @ high_map.T)
+        favorable_metrics = field_metrics_batch(favorable, fields @ low_map.T)
+        null = adverse_metrics - favorable_metrics
         z, p, joint_z, joint_p, _ = permutation_summary(observed, null)
         row = {'representation': meta['representation'], 'context': meta['context'],
                'heldout_dataset': meta.get('heldout_dataset', ''), 'surrogate_family': family,

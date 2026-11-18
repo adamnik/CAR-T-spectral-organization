@@ -46,11 +46,14 @@ def main():
         if not np.all((0 <= high) & (high <= 1)):
             raise ValueError(f'Invalid held-out membership in {heldout}')
         low = 1 - high
-        eligible = min(high.sum(), low.sum()) >= args.minimum_effective_regime
+        # Use membership mass to decide which cohorts enter the comparison
+        high_mass = high.sum()
+        low_mass = low.sum()
+        eligible = min(high_mass, low_mass) >= args.minimum_effective_regime
         support.append({
-            'Dataset': heldout, 'n': len(indices), 'sum_low': low.sum(), 'sum_high': high.sum(),
-            'n_eff_low': low.sum()**2 / (low @ low) if low.any() else 0.,
-            'n_eff_high': high.sum()**2 / (high @ high) if high.any() else 0.,
+            'Dataset': heldout, 'n': len(indices), 'sum_low': low_mass, 'sum_high': high_mass,
+            'n_eff_low': low_mass**2 / (low @ low) if low.any() else 0.,
+            'n_eff_high': high_mass**2 / (high @ high) if high.any() else 0.,
             'eligible': eligible,
         })
         if not eligible:
