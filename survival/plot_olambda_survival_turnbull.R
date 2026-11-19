@@ -27,7 +27,7 @@ model_result <- read.csv(model_result_path, check.names = FALSE)
 
 required_membership <- c("Dataset", "sample_id", "O_lambda_inf_central")
 required_outcomes <- c("Dataset", "sample_id", "event_observed", "t_start", "t_end")
-required_results <- c("HR_median", "HR_q025", "HR_q975", "crossover_median")
+required_results <- c("HR_median", "HR_q025", "HR_q975", "P_effect_gt_0", "crossover_median")
 
 if (!all(required_membership %in% names(membership))) {
   stop("The membership file is missing required columns.")
@@ -113,10 +113,11 @@ colors <- c("Low Oλ" = "#2B6CB0", "High Oλ" = "#C43D4D")
 fills <- c("Low Oλ" = "#9EC5E8", "High Oλ" = "#E9A2AA")
 
 annotation <- sprintf(
-  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nCrossover Oλ = %.3f",
+  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nP(β > 0) = %.3f\nCrossover Oλ = %.3f",
   model_result$HR_median[[1]],
   model_result$HR_q025[[1]],
   model_result$HR_q975[[1]],
+  model_result$P_effect_gt_0[[1]],
   crossover
 )
 
