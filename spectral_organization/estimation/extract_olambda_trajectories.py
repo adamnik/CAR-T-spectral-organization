@@ -5,9 +5,7 @@ import gc
 import hashlib
 import json
 import math
-import time
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 
 import anndata as ad
@@ -21,18 +19,10 @@ from shared.analysis_io import safe_name
 
 RESULT_COLUMNS = [
     "Dataset", "sample_id", "trajectory_replicate", "target_depth",
-    "n_cells_available", "depth_fraction", "schedule_rank", "is_full_reference",
-    "cell_draw_seed", "nested_unique_cells", "gene_cell_fraction",
-    "graph_estimator", "estimator_fingerprint", "source_path", "computed_at_utc",
-    "O_lambda",
-    "n_nodes_input", "n_nodes_used", "n_isolates_removed",
-    "graph_density", "mean_nonzero_mi_weight",
-    "n_eigenvalues_near_one",
-    "largest_eigenvalue",
-    "lambda2_normalized_adjacency",
-    "smallest_normalized_adjacency_eigenvalue",
-    "zero_deviation_case", "k_min", "n_genes_after_filter",
-    "graph_seconds_including_filter", "spectral_seconds", "total_seconds",
+    "n_cells_available", "depth_fraction", "is_full_reference", "O_lambda",
+    "n_nodes_used", "n_isolates_removed", "graph_density", "mean_nonzero_mi_weight",
+    "n_eigenvalues_near_one", "lambda2_normalized_adjacency", "zero_deviation_case",
+    "k_min", "n_genes_after_filter",
 ]
 
 METRIC_COLUMNS = {
@@ -67,10 +57,12 @@ def matrix_to_memory(matrix):
     return np.asarray(matrix)
 
 
-def upsert_csv(path, rows, keys):
+def upsert_csv(path, rows, keys, columns=None):
     frame = pd.DataFrame(rows)
     if path.exists():
         frame = pd.concat([pd.read_csv(path), frame], ignore_index=True, sort=False)
+    if columns is not None:
+        frame = frame.loc[:, columns]
     frame = frame.drop_duplicates(keys, keep='last')
     frame = frame.sort_values(keys).reset_index(drop=True)
     atomic_csv(frame, path)
@@ -88,13 +80,11 @@ def adaptive_uniform_depths(n_cells, completed, target_count, minimum_depth,
     """Retain completed depths and fill the largest remaining depth gaps."""
     target_count = min(int(target_count), n_cells - minimum_depth)
     selected = {int(x) for x in completed if minimum_depth <= int(x) < n_cells}
-    added = []
 
     for depth in anchors:
         depth = min(int(depth), n_cells - 1)
         if depth >= minimum_depth and depth not in selected:
             selected.add(depth)
-            added.append(depth)
 
     rng = np.random.default_rng(
         stable_seed(random_state, "adaptive-depth-gap-fill", patient, replicate)
@@ -113,10 +103,8 @@ def adaptive_uniform_depths(n_cells, completed, target_count, minimum_depth,
         if (right - left) % 2 and rng.random() < 0.5:
             midpoint += 1
         selected.add(midpoint)
-        added.append(midpoint)
 
-    ranks = {depth: rank for rank, depth in enumerate(added, start=1)}
-    return sorted(selected), ranks
+    return sorted(selected)
 
 
 @torch.inference_mode()
@@ -249,7 +237,6 @@ def spectral_organization(graph, spectral_epsilon=1e-7,
 
 def trajectory_point(expression, order, depth, gene_fraction,
                      minimum_state_count, device):
-    started = time.perf_counter()
     rows = np.sort(order[:depth])
     selected = expression[rows]
     detected = np.asarray((selected > 0).sum(axis=0)).ravel()
@@ -259,10 +246,7 @@ def trajectory_point(expression, order, depth, gene_fraction,
         raise ValueError(f"Only {len(genes)} genes pass the two-state filter.")
 
     graph = binary_plugin_mi(selected[:, genes], device)
-    graph_seconds = time.perf_counter() - started
-    spectral_started = time.perf_counter()
     values = spectral_graph_statistics(graph)
-    spectral_seconds = time.perf_counter() - spectral_started
     del graph, selected
     gc.collect()
     torch.cuda.empty_cache()
@@ -271,9 +255,6 @@ def trajectory_point(expression, order, depth, gene_fraction,
         **values,
         "k_min": k_min,
         "n_genes_after_filter": len(genes),
-        "graph_seconds_including_filter": graph_seconds,
-        "spectral_seconds": spectral_seconds,
-        "total_seconds": time.perf_counter() - started,
     }
 
 
@@ -415,7 +396,7 @@ def main():
                 part_path = parts_dir / f"{safe_name(args.dataset_name)}__{safe_name(patient)}__r{replicate}.csv"
                 done = completed_depths(part_path)
                 count = math.ceil(args.point_multiplier * math.sqrt(len(rows)))
-                depths, ranks = adaptive_uniform_depths(
+                depths = adaptive_uniform_depths(
                     len(rows), done, count, args.minimum_depth, anchors,
                     args.random_state, patient, replicate,
                 )
@@ -425,7 +406,6 @@ def main():
                         "sample_id": patient,
                         "trajectory_replicate": replicate,
                         "target_depth": depth,
-                        "schedule_rank": ranks.get(depth, 0),
                         "is_full_reference": False,
                         "n_cells_available": len(rows),
                     })
@@ -434,7 +414,6 @@ def main():
                     "sample_id": patient,
                     "trajectory_replicate": replicate,
                     "target_depth": len(rows),
-                    "schedule_rank": 0,
                     "is_full_reference": True,
                     "n_cells_available": len(rows),
                 })
@@ -505,25 +484,17 @@ def main():
                             "target_depth": depth,
                             "n_cells_available": len(rows),
                             "depth_fraction": depth / len(rows),
-                            "schedule_rank": int(job.schedule_rank),
                             "is_full_reference": bool(job.is_full_reference),
-                            "cell_draw_seed": seed,
-                            "nested_unique_cells": True,
-                            "gene_cell_fraction": args.gene_cell_fraction,
-                            "graph_estimator": "raw_binary_plugin_MI",
-                            "estimator_fingerprint": fingerprint,
-                            "source_path": str(args.input_h5ad),
-                            "computed_at_utc": datetime.now(timezone.utc).isoformat(),
                             **values,
                         }
                         upsert_csv(
                             part_path, [result],
                             ["Dataset", "sample_id", "trajectory_replicate", "target_depth"],
+                            columns=RESULT_COLUMNS,
                         )
                         done.add(depth)
                         print(
-                            f"      O_lambda={values['O_lambda']:.7g} | genes={values['n_genes_after_filter']:,} | "
-                            f"time={values['total_seconds'] / 60:.2f} min",
+                            f"      O_lambda={values['O_lambda']:.7g} | genes={values['n_genes_after_filter']:,}",
                             flush=True,
                         )
                     except Exception as error:
