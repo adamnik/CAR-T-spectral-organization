@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from shared.analysis_io import safe_name
-from clinical_fields.analyze_cross_system_predictive_field import ASA_GEP_FEATURES
+from shared.tcat_features import ASA_GEP_FEATURES
 from clinical_fields.predictive_field import METRICS, benjamini_hochberg, combine_folds, permutation_summary
 
 

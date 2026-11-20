@@ -7,19 +7,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
-
-
-ASA_COMPONENTS = [
-    "TCAT_GEP_OX40_EBI3",
-    "TCAT_GEP_ICOS_CD38",
-    "TCAT_GEP_CTLA4_CD38",
-    "TCAT_GEP_TIMD4_TIM3",
-]
-PROLIFERATION_COMPONENTS = [
-    "TCAT_GEP_CellCycle_G2M",
-    "TCAT_GEP_CellCycle_Late_S",
-    "TCAT_GEP_CellCycle_S",
-]
+from shared.tcat_features import ASA_COMPONENTS, PROLIFERATION_COMPONENTS, SCORE_FEATURES
 
 
 def clr(values):
@@ -119,7 +107,7 @@ def main():
         raise ValueError("Cell-level TCAT GEP values do not sum to one.")
 
     feature_names = [f"{column}_CLR" for column in gep_columns]
-    feature_names.extend(["TCAT_SCORE_ASA_CLR", "TCAT_SCORE_Proliferation_CLR"])
+    feature_names.extend(SCORE_FEATURES)
     component_index = {column: index for index, column in enumerate(gep_columns)}
     asa_index = np.asarray([component_index[x] for x in ASA_COMPONENTS])
     proliferation_index = np.asarray([component_index[x] for x in PROLIFERATION_COMPONENTS])

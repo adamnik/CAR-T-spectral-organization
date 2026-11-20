@@ -9,83 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.spatial.distance import squareform
-
-
-DISPLAY_NAMES = {
-    "TCAT_GEP_Doublet_Plasmablast_CLR": "Plasmablast-like",
-    "TCAT_GEP_Mito_CLR": "Mitochondrial",
-    "TCAT_GEP_Doublet_Myeloid_CLR": "Myeloid-like",
-    "TCAT_GEP_Doublet_Bcell_CLR": "B Cell-like",
-    "TCAT_GEP_Doublet_Fibroblast_CLR": "Fibroblast-like",
-    "TCAT_GEP_Metallothionein_CLR": "Metallothionein",
-    "TCAT_GEP_Doublet_RBC_CLR": "Erythroid-like",
-    "TCAT_GEP_HLA_CLR": "HLA",
-    "TCAT_GEP_NME1_FABP5_CLR": "NME1/FABP5",
-    "TCAT_GEP_CellCycle_S_CLR": "Cell Cycle S",
-    "TCAT_GEP_CellCycle_G2M_CLR": "Cell Cycle G2M",
-    "TCAT_GEP_CellCycle_Late_S_CLR": "Cell Cycle Late S",
-    "TCAT_GEP_Tfh_1_CLR": "TFH 1",
-    "TCAT_GEP_IL10_IL19_CLR": "IL10/IL19",
-    "TCAT_GEP_SOX4_TOX2_CLR": "SOX4/TOX2",
-    "TCAT_GEP_IEG_CLR": "IEG",
-    "TCAT_GEP_IEG2_CLR": "IEG2",
-    "TCAT_GEP_Exhaustion_CLR": "Exhaustion",
-    "TCAT_GEP_Multi_Cytokine_CLR": "Multi-cytokine",
-    "TCAT_GEP_OX40_EBI3_CLR": "OX40/EBI3",
-    "TCAT_GEP_Tph_CLR": "TPH",
-    "TCAT_GEP_Doublet_Platelet_CLR": "Platelet-like",
-    "TCAT_GEP_Tfh_2_CLR": "TFH 2",
-    "TCAT_GEP_RGCC_MYADM_CLR": "RGCC/MYADM",
-    "TCAT_GEP_Heatshock_CLR": "Heat Shock",
-    "TCAT_GEP_IEG3_CLR": "IEG3",
-    "TCAT_GEP_ISG_CLR": "ISG",
-    "TCAT_GEP_BCL2_FAM13A_CLR": "BCL2/FAM13A",
-    "TCAT_GEP_CD4_Naive_CLR": "CD4 Naive",
-    "TCAT_GEP_CD8_Naive_CLR": "CD8 Naive",
-    "TCAT_GEP_MAIT_CLR": "MAIT",
-    "TCAT_GEP_Th17_Resting_CLR": "TH17 Resting",
-    "TCAT_GEP_CTLA4_CD38_CLR": "CTLA4/CD38",
-    "TCAT_GEP_Th17_Activated_CLR": "TH17 Activated",
-    "TCAT_GEP_Poor_Quality_CLR": "Poor Quality",
-    "TCAT_GEP_CD4_CM_CLR": "CD4 Central Memory",
-    "TCAT_GEP_CD40LG_TXNIP_CLR": "CD40LG/TXNIP",
-    "TCAT_GEP_Treg_CLR": "Treg",
-    "TCAT_GEP_Th2_Activated_CLR": "TH2 Activated",
-    "TCAT_GEP_Th2_Resting_CLR": "TH2 Resting",
-    "TCAT_GEP_Th22_CLR": "TH22",
-    "TCAT_GEP_Cytoskeleton_CLR": "Cytoskeleton",
-    "TCAT_GEP_ICOS_CD38_CLR": "ICOS/CD38",
-    "TCAT_GEP_CD172a_MERTK_CLR": "CD172a/MERTK",
-    "TCAT_GEP_Translation_CLR": "Translation",
-    "TCAT_GEP_TEMRA_CLR": "TEMRA",
-    "TCAT_GEP_CD8_Trm_CLR": "CD8 TRM",
-    "TCAT_GEP_TIMD4_TIM3_CLR": "TIMD4/TIM3",
-    "TCAT_GEP_Th1_Like_CLR": "TH1-like",
-    "TCAT_GEP_gdT_CLR": "γδ T",
-    "TCAT_GEP_CD8_EM_CLR": "CD8 Effector Memory",
-    "TCAT_GEP_Cytotoxic_CLR": "Cytotoxic",
-}
-
-
-def feature_label(feature):
-    if feature in DISPLAY_NAMES:
-        return DISPLAY_NAMES[feature]
-    label = (
-        feature.replace("TCAT_GEP_", "").replace("ATLAS_proportion_", "")
-        .replace("_CLR", "")
-        .replace("_", " ")
-    )
-    replacements = {
-        "Doublet Bcell": "B-cell-like",
-        "Doublet Fibroblast": "Fibroblast-like",
-        "Doublet Myeloid": "Myeloid-like",
-        "Doublet Plasmablast": "Plasmablast-like",
-        "Doublet Platelet": "Platelet-like",
-        "Doublet RBC": "Erythroid-like",
-    }
-    for old, new in replacements.items():
-        label = label.replace(old, new)
-    return label
+from shared.tcat_features import plot_label
 
 
 def correlation_matrix(features, pairwise):
@@ -126,7 +50,7 @@ def figure_annotations(features, olambda, survival):
         hazard = survival.loc[feature]
         rows.append({
             "feature": feature,
-            "label": feature_label(feature),
+            "label": plot_label(feature),
             "O_lambda_rho_median": correlation.rho_median,
             "O_lambda_rho_q025": correlation.rho_q025,
             "O_lambda_rho_q975": correlation.rho_q975,

@@ -24,80 +24,17 @@ if (!all(required %in% names(results))) {
   stop("The individual result file is missing required columns.")
 }
 
-gep_names <- c(
-  "BCL2_FAM13A" = "BCL2/FAM13A",
-  "CD172a_MERTK" = "CD172a/MERTK",
-  "CD40LG_TXNIP" = "CD40LG/TXNIP",
-  "CD4_CM" = "CD4 Central Memory",
-  "CD4_Naive" = "CD4 Naive",
-  "CD8_EM" = "CD8 Effector Memory",
-  "CD8_Naive" = "CD8 Naive",
-  "CD8_Trm" = "CD8 TRM",
-  "CTLA4_CD38" = "CTLA4/CD38",
-  "CellCycle_G2M" = "Cell Cycle G2M",
-  "CellCycle_Late_S" = "Cell Cycle Late S",
-  "CellCycle_S" = "Cell Cycle S",
-  "Cytoskeleton" = "Cytoskeleton",
-  "Cytotoxic" = "Cytotoxic",
-  "Doublet_Bcell" = "B Cell-like",
-  "Doublet_Fibroblast" = "Fibroblast-like",
-  "Doublet_Myeloid" = "Myeloid-like",
-  "Doublet_Plasmablast" = "Plasmablast-like",
-  "Doublet_Platelet" = "Platelet-like",
-  "Doublet_RBC" = "Erythroid-like",
-  "Exhaustion" = "Exhaustion",
-  "HLA" = "HLA",
-  "Heatshock" = "Heat Shock",
-  "ICOS_CD38" = "ICOS/CD38",
-  "IEG" = "IEG",
-  "IEG2" = "IEG2",
-  "IEG3" = "IEG3",
-  "IL10_IL19" = "IL10/IL19",
-  "ISG" = "ISG",
-  "MAIT" = "MAIT",
-  "Metallothionein" = "Metallothionein",
-  "Mito" = "Mitochondrial",
-  "Multi_Cytokine" = "Multi-cytokine",
-  "NME1_FABP5" = "NME1/FABP5",
-  "OX40_EBI3" = "OX40/EBI3",
-  "Poor_Quality" = "Poor Quality",
-  "RGCC_MYADM" = "RGCC/MYADM",
-  "SOX4_TOX2" = "SOX4/TOX2",
-  "TEMRA" = "TEMRA",
-  "TIMD4_TIM3" = "TIMD4/TIM3",
-  "Tfh_1" = "TFH 1",
-  "Tfh_2" = "TFH 2",
-  "Th17_Activated" = "TH17 Activated",
-  "Th17_Resting" = "TH17 Resting",
-  "Th1_Like" = "TH1-like",
-  "Th22" = "TH22",
-  "Th2_Activated" = "TH2 Activated",
-  "Th2_Resting" = "TH2 Resting",
-  "Tph" = "TPH",
-  "Translation" = "Translation",
-  "Treg" = "Treg",
-  "gdT" = "γδ T"
-)
-
-display_name <- function(feature, kind) {
-  if (kind == "GEP") {
-    key <- sub("^TCAT_GEP_", "", feature)
-    key <- sub("_CLR$", "", key)
-    return(unname(gep_names[[key]]))
-  }
-  if (kind == "score") {
-    key <- sub("^TCAT_SCORE_", "", feature)
-    key <- sub("_CLR$", "", key)
-    if (key == "ASA") {
-      return("Antigen-associated Activation")
-    }
-    return(key)
-  }
-  gsub("_", " ", sub("_CLR$", "", sub("^ATLAS_proportion_", "", feature)))
-}
+script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- dirname(normalizePath(sub("^--file=", "", script_arg)))
+labels <- read.csv(file.path(script_dir, "..", "shared", "feature_labels.csv"), fileEncoding = "UTF-8")
 
 results <- results[!startsWith(results$feature, "TCAT_SCORE_Multinomial_Label_proportion_"), ]
-results$display_name <- mapply(display_name, results$feature, results$feature_kind)
+results$display_name <- labels$label[match(results$feature, labels$feature)]
+# Keep the original fallback for additional scores and atlas phenotypes
+extra <- is.na(results$display_name) & results$feature_kind != "GEP"
+keys <- sub("_CLR$", "", results$feature[extra])
+results$display_name[extra] <- ifelse(results$feature_kind[extra] == "score",
+  sub("^TCAT_SCORE_", "", keys), gsub("_", " ", sub("^ATLAS_proportion_", "", keys)))
 if (any(is.na(results$display_name))) {
   missing <- results$feature[is.na(results$display_name)]
   stop("Missing display names: ", paste(missing, collapse = ", "))

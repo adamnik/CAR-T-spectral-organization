@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedFormatter, FixedLocator
 import pandas as pd
+from shared.tcat_features import plot_label
 
 
 COLORS = {
@@ -19,19 +20,6 @@ COLORS = {
     "O_lambda": "#C23B3B",
 }
 
-DISPLAY_NAMES = {
-    "TCAT_GEP_Th17_Activated_CLR": "TH17 Activated",
-    "TCAT_GEP_Tph_CLR": "TPH",
-    "TCAT_GEP_Exhaustion_CLR": "Exhaustion",
-    "TCAT_SCORE_ASA_CLR": "Antigen-associated\nActivation",
-    "TCAT_GEP_CD4_Naive_CLR": "CD4 Naive",
-    "TCAT_GEP_CTLA4_CD38_CLR": "CTLA4/CD38",
-    "TCAT_GEP_CD8_Naive_CLR": "CD8 Naive",
-    "TCAT_GEP_SOX4_TOX2_CLR": "SOX4/TOX2",
-    "TCAT_GEP_Translation_CLR": "Translation",
-    "TCAT_GEP_Heatshock_CLR": "Heat Shock",
-    "O_lambda": r"$\mathcal{O}_{\lambda}$",
-}
 
 LABEL_LAYOUT = {
     "continuous": {
@@ -148,7 +136,7 @@ def draw_panel(ax, frame, model):
         outside = model == "regime" and row.feature in OUTSIDE_REGIME_LABELS
         color = COLORS[row.kind] if row.kind != "GEP" else "#606060"
         ax.annotate(
-            DISPLAY_NAMES[row.feature],
+            plot_label(row.feature),
             xy=(row.hr, row.alignment),
             xytext=(1.025, y_text) if outside else (x_text, y_text),
             textcoords=ax.get_yaxis_transform() if outside else "data",

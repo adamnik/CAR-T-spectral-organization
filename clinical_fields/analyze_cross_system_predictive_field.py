@@ -3,17 +3,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from shared.tcat_features import ASA_GEP_FEATURES, SCORE_FEATURES
 
 from shared.analysis_io import safe_name
 from clinical_fields.predictive_field import METRICS, benjamini_hochberg, field_test, particle_profiles, posterior_states
 
 
-ASA_GEP_FEATURES = [
-    "TCAT_GEP_OX40_EBI3_CLR",
-    "TCAT_GEP_ICOS_CD38_CLR",
-    "TCAT_GEP_CTLA4_CD38_CLR",
-    "TCAT_GEP_TIMD4_TIM3_CLR",
-]
 CONTEXT_EXCLUDED_FEATURES = {"TCAT_SCORE_ASA_CLR": ASA_GEP_FEATURES}
 
 
@@ -84,7 +79,7 @@ def main():
 
     selected_tcat = significant_transition_features(
         args.tcat_regime_results_csv, ['TCAT_GEP_'],
-        ['TCAT_SCORE_ASA_CLR', 'TCAT_SCORE_Proliferation_CLR'],
+        SCORE_FEATURES,
     )
     selected_atlas = significant_transition_features(
         args.atlas_regime_results_csv, ['ATLAS_proportion_']

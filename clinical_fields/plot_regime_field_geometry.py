@@ -6,47 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
-GEP_NAMES = {
-    'BCL2_FAM13A': 'BCL2/FAM13A', 'CD172a_MERTK': 'CD172a/MERTK',
-    'CD40LG_TXNIP': 'CD40LG/TXNIP', 'CD4_CM': 'CD4 Central Memory',
-    'CD4_Naive': 'CD4 Naive', 'CD8_EM': 'CD8 Effector Memory',
-    'CD8_Naive': 'CD8 Naive', 'CD8_Trm': 'CD8 TRM',
-    'CTLA4_CD38': 'CTLA4/CD38', 'CellCycle_G2M': 'Cell Cycle G2M',
-    'CellCycle_Late_S': 'Cell Cycle Late S', 'CellCycle_S': 'Cell Cycle S',
-    'Cytoskeleton': 'Cytoskeleton', 'Cytotoxic': 'Cytotoxic',
-    'Doublet_Bcell': 'B Cell-like', 'Doublet_Fibroblast': 'Fibroblast-like',
-    'Doublet_Myeloid': 'Myeloid-like', 'Doublet_Plasmablast': 'Plasmablast-like',
-    'Doublet_Platelet': 'Platelet-like', 'Doublet_RBC': 'Erythroid-like',
-    'Exhaustion': 'Exhaustion', 'HLA': 'HLA', 'Heatshock': 'Heat Shock',
-    'ICOS_CD38': 'ICOS/CD38', 'IEG': 'IEG', 'IEG2': 'IEG2', 'IEG3': 'IEG3',
-    'IL10_IL19': 'IL10/IL19', 'ISG': 'ISG', 'MAIT': 'MAIT',
-    'Metallothionein': 'Metallothionein', 'Mito': 'Mitochondrial',
-    'Multi_Cytokine': 'Multi-cytokine', 'NME1_FABP5': 'NME1/FABP5',
-    'OX40_EBI3': 'OX40/EBI3', 'Poor_Quality': 'Poor Quality',
-    'RGCC_MYADM': 'RGCC/MYADM', 'SOX4_TOX2': 'SOX4/TOX2',
-    'TEMRA': 'TEMRA', 'TIMD4_TIM3': 'TIMD4/TIM3', 'Tfh_1': 'TFH 1',
-    'Tfh_2': 'TFH 2', 'Th17_Activated': 'TH17 Activated',
-    'Th17_Resting': 'TH17 Resting', 'Th1_Like': 'TH1-like', 'Th22': 'TH22',
-    'Th2_Activated': 'TH2 Activated', 'Th2_Resting': 'TH2 Resting',
-    'Tph': 'TPH', 'Translation': 'Translation', 'Treg': 'Treg', 'gdT': 'γδ T',
-}
-SCORE_NAMES = {
-    'TCAT_SCORE_ASA_CLR': 'Antigen-associated\nActivation',
-    'TCAT_SCORE_Proliferation_CLR': 'Proliferation',
-}
-ATLAS_NAMES = {
-    'Apoptotic_T_cells': 'Apoptotic T cells',
-    'CD4_central_memory': 'CD4 Central Memory',
-    'CD4_cytotoxic': 'CD4 Cytotoxic',
-    'CD4_effector_memory': 'CD4 Effector Memory',
-    'CD8_cytotoxic': 'CD8 Cytotoxic',
-    'CD8_effector_memory': 'CD8 Effector Memory',
-    'CD8_memory': 'CD8 Memory',
-    'Monocyte_like_T_cells': 'Monocyte-like T cells',
-    'Proliferative_T_cells': 'Proliferative T cells',
-    'Regulatory_T_cells': 'Regulatory T cells',
-    'Ribosomal_enriched': 'Ribosomal Enriched',
-}
+from shared.tcat_features import SCORE_FEATURES, plot_label
 
 def context_class(context):
     context = str(context)
@@ -54,25 +14,11 @@ def context_class(context):
         return 'system'
     if context.startswith('TCAT_GEP_'):
         return 'TCAT GEP'
-    if context in SCORE_NAMES:
+    if context in SCORE_FEATURES:
         return 'TCAT score'
     if context.startswith('ATLAS_proportion_'):
         return 'Atlas cell type'
     return 'other'
-
-def display_name(context):
-    context = str(context)
-    if context == 'O_lambda':
-        return r'$\mathcal{O}_{\lambda}$'
-    if context in SCORE_NAMES:
-        return SCORE_NAMES[context]
-    if context.startswith('TCAT_GEP_'):
-        key = context.removeprefix('TCAT_GEP_').removesuffix('_CLR')
-        return GEP_NAMES.get(key, key.replace('_', ' '))
-    if context.startswith('ATLAS_proportion_'):
-        key = context.removeprefix('ATLAS_proportion_').removesuffix('_CLR')
-        return ATLAS_NAMES.get(key, key.replace('_', ' '))
-    return context
 
 def main():
     parser = argparse.ArgumentParser(description='Plot Figure 5B from the pooled mean geometry.')
@@ -82,7 +28,7 @@ def main():
                          'axes.titleweight': 'bold', 'axes.linewidth': 0.7, 'pdf.fonttype': 42})
     combined = pd.read_csv(args.pooled_dir / 'mean_predictive_field_context_results.csv')
     selected_contexts = pd.read_csv(args.pooled_dir / 'selected_contexts.csv')
-    selected_contexts['display_name'] = selected_contexts.context.map(display_name)
+    selected_contexts['display_name'] = selected_contexts.context.map(plot_label)
     selected_contexts['context_class'] = selected_contexts.context.map(context_class)
     order = {'system': 0, 'TCAT GEP': 1, 'TCAT score': 2, 'Atlas cell type': 3}
     selected_contexts['class_order'] = selected_contexts.context_class.map(order)
@@ -193,7 +139,7 @@ def main():
             for column, (metric, sign, metric_label) in enumerate(METRICS):
                 heatmap_rows.append({
                     'field': field, 'field_label': title,
-                    'context': context, 'display_name': display_name(context),
+                    'context': context, 'display_name': plot_label(context),
                     'metric': metric, 'metric_label': metric_label.replace('\n', ' '),
                     'orientation': sign, 'oriented_z': matrix[row, column],
                 })
