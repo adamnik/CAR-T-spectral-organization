@@ -24,7 +24,7 @@ From the repository root, use Python 3.11 and run Python scripts as modules.
 python -m pip install -r requirements.txt
 ```
 
-Use `--help` for Python script arguments. Run R scripts with `Rscript`; the asymptote model requires `nlme`, and spectral trajectory extraction requires CUDA.
+Use `--help` for Python script arguments. Run R scripts with `Rscript`; the asymptote model requires `nlme`, and spectral trajectory extraction requires a CUDA-enabled PyTorch build.
 
 ## Checks
 

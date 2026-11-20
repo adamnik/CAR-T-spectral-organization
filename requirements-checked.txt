@@ -67,6 +67,8 @@ statsmodels==0.15.0
 threadpoolctl==3.7.0
 tifffile==2026.3.3
 toolz==1.2.0
+# Historical CPU test environment. This build warned when initializing NumPy 2.
+torch==2.2.2
 tqdm==4.70.1
 typing_extensions==4.16.0
 tzdata==2026.6
