@@ -1,5 +1,3 @@
-#!/usr/bin/env Rscript
-
 suppressPackageStartupMessages({
   library(ggplot2)
   library(scales)
