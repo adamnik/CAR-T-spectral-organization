@@ -12,7 +12,7 @@ if (length(args) < 4 || length(args) > 7) {
         "Usage: Rscript gene_enrichment/plot_reactome_enrichment_network.R",
         "nodes_with_layout.csv edges.csv modules.csv output_dir",
         "[context] [output_stem]",
-        "[refined]"
+        "[refined|fixed]"
     ))
 }
 
@@ -22,7 +22,7 @@ modules_path <- args[[3]]
 output_dir <- args[[4]]
 if (length(args) >= 5 && args[[5]] != "context") stop("Use the all-pathway context.")
 output_stem <- if (length(args) >= 6) args[[6]] else "olambda_reactome_enrichment"
-if (length(args) >= 7 && args[[7]] != "refined") stop("Use the refined layout.")
+layout_mode <- if (length(args) >= 7) match.arg(args[[7]], c("refined", "fixed")) else "refined"
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 nodes <- read.csv(nodes_path, check.names = FALSE)
@@ -32,6 +32,7 @@ modules <- read.csv(modules_path, check.names = FALSE)
 nodes <- nodes[nodes$displayed & is.finite(nodes$x) & is.finite(nodes$y), , drop = FALSE]
 nodes$name <- nodes$pathway
 nodes$significance <- pmin(-log10(pmax(nodes$padj, .Machine$double.xmin)), 25)
+nodes$significance[!is.finite(nodes$significance)] <- 0
 nodes$node_alpha <- ifelse(
     nodes$significant,
     0.96,
@@ -70,12 +71,14 @@ normalize_layout <- function(value) {
     value
 }
 
-set.seed(0)
-coordinates <- layout_with_fr(
-    graph, coords = coordinates, weights = E(graph)$similarity,
-    niter = 1800, grid = "nogrid"
-)
-coordinates <- normalize_layout(coordinates)
+if (layout_mode == "refined") {
+    set.seed(0)
+    coordinates <- layout_with_fr(
+        graph, coords = coordinates, weights = E(graph)$similarity,
+        niter = 1800, grid = "nogrid"
+    )
+    coordinates <- normalize_layout(coordinates)
+}
 
 # Module labels must follow the selected layout rather than the coordinates
 # stored by the original packed-module arrangement.
@@ -131,7 +134,7 @@ module_labels <- do.call(rbind, lapply(seq_len(nrow(modules)), function(index) {
     )
 }))
 
-maximum_nes <- max(abs(nodes$NES))
+maximum_nes <- max(abs(nodes$NES), na.rm = TRUE)
 plot <- ggraph(graph, layout = coordinates) +
     geom_edge_link(
         aes(width = similarity, alpha = similarity),
@@ -191,6 +194,7 @@ ggsave(
 module_summary <- do.call(rbind, lapply(seq_len(nrow(modules)), function(index) {
     group <- modules$cluster[index]
     values <- nodes$NES[nodes$cluster == group]
+    values <- values[is.finite(values)]
     if (!length(values)) return(NULL)
     data.frame(
         cluster = group,
