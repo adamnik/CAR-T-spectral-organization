@@ -119,6 +119,10 @@ def load_olambda_analysis(
     particles_path=None, adjustment_columns=None,
 ):
     asymptotes = pd.read_csv(asymptote_path)
+    scale_tag = asymptotes.get("olambda_scale")
+    reciprocal = scale_tag is not None and scale_tag.eq("reciprocal").all()
+    if scale_tag is not None and not reciprocal:
+        raise ValueError("Expected a homogeneous reciprocal O_lambda estimate table.")
     outcomes = pd.read_csv(outcome_path)
     if "event_observed" not in outcomes.columns and "event" in outcomes.columns:
         outcomes = outcomes.rename(columns={"event": "event_observed"})
@@ -149,6 +153,8 @@ def load_olambda_analysis(
         if candidate.exists():
             particles_path = candidate
     if particles_path is None:
+        if reciprocal:
+            raise ValueError("Reciprocal estimates require the saved reciprocal particle CSV.")
         numeric_columns.extend(['log_O_minus_1_inf_location', 'log_O_minus_1_inf_scale'])
     for column in numeric_columns:
         data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -201,7 +207,12 @@ def load_olambda_analysis(
         ).sort_values(["Dataset", "sample_id"]).reset_index(drop=True)
         raw_particles = data[particle_columns].apply(pd.to_numeric, errors='coerce').to_numpy(float)
         data = data.drop(columns=particle_columns)
-        if np.any(~np.isfinite(raw_particles)) or np.any(raw_particles <= 1):
+        if reciprocal:
+            centers = data.O_lambda_inf_central.to_numpy(float)
+            if (not np.all((raw_particles > 0) & (raw_particles < 1))
+                    or not np.all((centers > 0) & (centers < 1))):
+                raise ValueError("Reciprocal O_lambda estimates and particles must be in (0, 1).")
+        elif np.any(~np.isfinite(raw_particles)) or np.any(raw_particles <= 1):
             raise ValueError("O_lambda particles must be finite and greater than one.")
         particle_source = str(particles_path)
     else:
