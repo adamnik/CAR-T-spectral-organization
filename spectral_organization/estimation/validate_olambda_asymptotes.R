@@ -88,8 +88,6 @@ safe_name <- function(value) {
 
 sample_coefficients <- function(posterior, number) {
   covariance <- posterior$covariance
-  covariance[1, 1] <- covariance[1, 1] +
-    calibrated_log_asymptote_floor^2
   decomposition <- chol(positive_definite(covariance))
   standardized <- matrix(rnorm(number * 3), number, 3)
   standardized <- standardized * sqrt(
@@ -416,7 +414,7 @@ main_validation <- function() {
       patients = nrow(heldout),
       quadrature_nodes = quadrature_nodes,
       log_tau_scale = log_tau_scale,
-      calibrated_log_asymptote_floor = calibrated_log_asymptote_floor
+      calibrated_log_asymptote_floor = 0
     ),
     file.path(arguments$output_dir, "validation_config.csv")
   )
