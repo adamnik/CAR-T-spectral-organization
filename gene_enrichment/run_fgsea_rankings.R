@@ -3,14 +3,13 @@
 suppressPackageStartupMessages({
     library(data.table)
     library(fgsea)
-    library(msigdbr)
 })
 
 arguments <- commandArgs(trailingOnly = TRUE)
 if (length(arguments) < 2) {
     stop(paste(
         "Usage: Rscript gene_enrichment/run_fgsea_rankings.R ranking.rnk output_dir",
-        "[min_size] [max_size] [n_perm_simple]"
+        "[min_size] [max_size] [n_perm_simple] [saved_membership_dir] [seed]"
     ))
 }
 
@@ -28,12 +27,26 @@ setorder(ranking, -score, gene)
 statistics <- ranking$score
 names(statistics) <- ranking$gene
 
-collections <- list(
-    Hallmark = msigdbr(species = "Homo sapiens", collection = "H"),
-    Reactome = msigdbr(
-        species = "Homo sapiens", collection = "C2", subcollection = "CP:REACTOME"
+if (length(arguments) >= 6L) {
+    reference_dir <- arguments[[6]]
+    versions <- fread(file.path(reference_dir, "fgsea_collection_versions.csv"))
+    load_collection <- function(name) {
+        membership <- fread(file.path(reference_dir, paste0("membership_", name, ".csv")))
+        version <- versions[collection == name, msigdb_version]
+        stopifnot(length(version) == 1L, nrow(membership) > 0L,
+                  all(membership$collection == name))
+        membership[, .(gs_name = pathway, gene_symbol = gene, db_version = version)]
+    }
+    collections <- list(Hallmark = load_collection("Hallmark"), Reactome = load_collection("Reactome"))
+} else {
+    collections <- list(
+        Hallmark = msigdbr::msigdbr(species = "Homo sapiens", collection = "H"),
+        Reactome = msigdbr::msigdbr(
+            species = "Homo sapiens", collection = "C2", subcollection = "CP:REACTOME"
+        )
     )
-)
+}
+if (length(arguments) >= 7L) set.seed(as.integer(arguments[[7]]))
 
 all_results <- list()
 collection_versions <- list()
