@@ -51,10 +51,11 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
             pt.sum(activation * pt.as_tensor_variable(particle_weights), axis=1),
             dims="observation",
         )
+        hazard_activation = activation - 0.5 if args.midpoint_centered else activation
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
             + clinical_adjustment[:, None, None]
-            + patient_effect[:, None, None] * activation[:, :, None]
+            + patient_effect[:, None, None] * hazard_activation[:, :, None]
         )
         conditional = interval_loglikelihood(hazard, arrays)
         patient_loglikelihood = marginalize_particles(conditional, particle_weights)
@@ -94,6 +95,7 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
         "crossover_q025_percentile": float(np.mean(values <= crossover_q025)),
         "crossover_q975_percentile": float(np.mean(values <= crossover_q975)),
         "transition_scale_sd": args.transition_scale_sd,
+        "hazard_activation_offset": 0.5 if args.midpoint_centered else 0.0,
         "patients": len(data),
         "events": int(data.event_observed.sum()),
         "datasets": len(arrays["datasets"]),
@@ -129,6 +131,7 @@ def regime_model(feature, feature_index, data, central, particles, particle_weig
             "upper": crossover_high,
         },
         "transition_scale_sd": args.transition_scale_sd,
+        "hazard_activation_offset": 0.5 if args.midpoint_centered else 0.0,
         "adjustments": parse_adjustments(args.adjustment),
         "adjustment_effect_prior": f"Normal(0, {args.adjustment_effect_sd})",
     }
@@ -151,6 +154,8 @@ def main():
     parser.add_argument("--maximum-features", type=int, default=None)
     parser.add_argument("--crossover-quantile-low", type=float, default=0.10)
     parser.add_argument("--crossover-quantile-high", type=float, default=0.90)
+    parser.add_argument("--midpoint-centered", action="store_true",
+                        help="Anchor the baseline log hazard at 50%% activation.")
     parser.add_argument("--transition-scale-sd", type=float, default=0.10)
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
@@ -205,11 +210,15 @@ def main():
         print(f"[{number}/{len(selected)}] {feature} ({feature_kind(feature)})", flush=True)
         print("=" * 100, flush=True)
         can_resume = (
-            result_path.exists()
+            (feature_dir / "model_manifest.json").exists()
+            and result_path.exists()
             and not args.overwrite
             and (not adjustments or adjustment_path.exists())
         )
         if can_resume:
+            manifest = json.loads((feature_dir / "model_manifest.json").read_text())
+            if manifest.get("hazard_activation_offset", 0.0) != (0.5 if args.midpoint_centered else 0.0):
+                raise ValueError("Existing individual fit uses a different hazard baseline. Use a new output directory.")
             result = pd.read_csv(result_path).iloc[0].to_dict()
             datasets = pd.read_csv(feature_dir / "dataset_effects.csv")
             if adjustment_path.exists():
@@ -260,6 +269,7 @@ def main():
         "crossover_quantile_low": args.crossover_quantile_low,
         "crossover_quantile_high": args.crossover_quantile_high,
         "transition_scale_sd": args.transition_scale_sd,
+        "hazard_activation_offset": 0.5 if args.midpoint_centered else 0.0,
         "draws": args.draws,
         "tune": args.tune,
         "chains": args.chains,
