@@ -55,6 +55,8 @@ def main():
     parser.add_argument(
         "--feature-kind", choices=["all", "gep", "cell_type"], default="all"
     )
+    parser.add_argument("--midpoint-centered", action="store_true",
+                        help="Anchor the baseline log hazard at 50%% activation.")
     parser.add_argument("--transition-scale-sd", type=float, default=0.10)
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
@@ -69,7 +71,11 @@ def main():
         raise ValueError("--transition-scale-sd must be positive.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     result_path = args.output_dir / "joint_feature_results.csv"
-    if result_path.exists() and not args.overwrite:
+    manifest_path = args.output_dir / "joint_manifest.json"
+    if manifest_path.exists() and result_path.exists() and not args.overwrite:
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("hazard_activation_offset", 0.0) != (0.5 if args.midpoint_centered else 0.0):
+            raise ValueError("Existing joint fit uses a different hazard baseline. Use a new output directory.")
         print(f"RESUME: existing completed joint model at {result_path}", flush=True)
         print(pd.read_csv(result_path).to_string(index=False), flush=True)
         return
@@ -107,6 +113,9 @@ def main():
         standardized - standardized_crossover[None, None, :]
     ) / args.transition_scale_sd
     activation = 1.0 / (1.0 + np.exp(-np.clip(distance, -40, 40)))
+
+    if args.midpoint_centered:
+        activation -= 0.5
 
     arrays = survival_arrays(data)
     adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
@@ -193,6 +202,7 @@ def main():
         "features": feature_names,
         "minimum_cells": args.minimum_cells,
         "transition_scale_sd": args.transition_scale_sd,
+        "hazard_activation_offset": 0.5 if args.midpoint_centered else 0.0,
         "draws": args.draws,
         "tune": args.tune,
         "chains": args.chains,
