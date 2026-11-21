@@ -95,6 +95,7 @@ def run_training_fits(folds, asymptotes_path,
         continuous_complete = (
             (continuous_dir / "model_result.csv").exists()
             and (continuous_dir / "posterior.nc").exists()
+            and (continuous_dir / "run_manifest.json").exists()
             and not args.overwrite
         )
         if continuous_complete:
@@ -112,9 +113,13 @@ def run_training_fits(folds, asymptotes_path,
         transition_complete = (
             (transition_dir / "model_result.csv").exists()
             and (transition_dir / "posterior.nc").exists()
+            and (transition_dir / "run_manifest.json").exists()
             and not args.overwrite
         )
         if transition_complete:
+            manifest = json.loads((transition_dir / "run_manifest.json").read_text())
+            if manifest.get("hazard_activation_offset", 0.0) != (0.5 if args.midpoint_centered else 0.0):
+                raise ValueError(f"Transition baseline differs in {transition_dir}. Use a fresh output directory.")
             print("Smooth transition: RESUME", flush=True)
         else:
             run_command([
@@ -126,6 +131,7 @@ def run_training_fits(folds, asymptotes_path,
                 "--crossover-quantile-low", args.crossover_quantile_low,
                 "--crossover-quantile-high", args.crossover_quantile_high,
                 "--transition-scale-sd", args.transition_scale_sd,
+                *(["--midpoint-centered"] if args.midpoint_centered else []),
             ])
 
 
@@ -263,7 +269,7 @@ def build_cross_fitted_scores(folds, asymptotes, particles, outcomes,
                 / transition_width
             )
             transition_scores[patient] = (
-                transition_beta[transition_indices] * activation
+                transition_beta[transition_indices] * (activation - transition_manifest.get("hazard_activation_offset", 0.0))
             )
 
         for patient, record in heldout_data.iterrows():
@@ -349,7 +355,8 @@ def run_heldout_validation(feature_names, estimates_path, particles_path,
                            outcomes_path, output_dir, args):
     validation_dir = output_dir / "heldout_score_validation"
     result_path = validation_dir / "individual_results.csv"
-    if result_path.exists() and not args.overwrite:
+    if (result_path.exists() and not args.overwrite
+            and set(pd.read_csv(result_path)["feature"]) == set(feature_names)):
         print("Held-out score validation: RESUME", flush=True)
     else:
         command = [
@@ -371,6 +378,8 @@ def run_heldout_validation(feature_names, estimates_path, particles_path,
             command.append("--overwrite")
         run_command(command)
     results = pd.read_csv(result_path)
+    if len(results) != len(feature_names) or set(results.feature) != set(feature_names):
+        raise RuntimeError(f"Incomplete held-out score validation in {validation_dir}")
     results.to_csv(
         output_dir / "cross_fitted_heldout_validation_results.csv", index=False
     )
@@ -400,6 +409,7 @@ def main():
     parser.add_argument("--cores", type=int, default=2)
     parser.add_argument("--target-accept", type=float, default=0.99)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument("--midpoint-centered", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     add_adjustment_arguments(parser)
     args = parser.parse_args()
@@ -457,6 +467,7 @@ def main():
         "crossover_quantile_low": args.crossover_quantile_low,
         "crossover_quantile_high": args.crossover_quantile_high,
         "transition_scale_sd": args.transition_scale_sd,
+        "midpoint_centered": args.midpoint_centered,
         "heldout_score_definition": (
             "training global effect multiplied by the training-defined continuous "
             "or smooth-transition transformation of held-out O-lambda particles"
