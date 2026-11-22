@@ -26,6 +26,17 @@ python -m pip install -r requirements.txt
 
 Use `--help` for Python script arguments. Run R scripts with `Rscript`; the asymptote model requires `nlme`, and spectral trajectory extraction requires a CUDA-enabled PyTorch build.
 
+To render the pooled compositional surrogate heatmap alongside Fig. 5B, use the final surrogate results and the pooled mean-geometry context results:
+
+```bash
+python -m clinical_fields.plot_surrogate_heatmap \
+  path/to/pooled_surrogate_results.csv \
+  path/to/mean_predictive_field_context_results.csv \
+  path/to/figures
+```
+
+The command writes a PDF and a 600-DPI JPEG. Cells show nominal joint surrogate probabilities, with color on the shared `-log10(p)` scale.
+
 ## Checks
 
 ```bash
