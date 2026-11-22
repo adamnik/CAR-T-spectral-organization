@@ -14,7 +14,6 @@ residual_student_df <- 4
 slope_student_df <- 10
 quadrature_nodes <- 9L
 log_tau_scale <- 0.35
-calibrated_log_asymptote_floor <- 0.0365797495529331
 minimum_O_minus_one <- 1e-5
 particle_simulations <- 50000L
 
@@ -242,7 +241,7 @@ sample_asymptote_posterior <- function(fit, simulations, seed) {
     selected <- which(component == index)
     if (!length(selected)) next
     posterior <- fit$components[[index]]
-    scale <- sqrt(posterior$scale^2 + calibrated_log_asymptote_floor^2)
+    scale <- posterior$scale
     log_excess[selected] <- posterior$location +
       scale * rt(length(selected), df = residual_student_df)
   }
@@ -318,8 +317,8 @@ estimate_patients <- function(populations, tau_values, frame, n_particles, rando
       maximum_component_convergence = max(vapply(
         fit$components, `[[`, numeric(1), "convergence"
       )),
-      model = "latent_timescale_student_t3_scale_0.35",
-      interval_type = "95% calibrated latent-timescale mixture interval",
+      model = "latent_timescale_student_t3_scale_0.35_no_asymptote_floor",
+      interval_type = "95% latent-timescale mixture interval",
       stringsAsFactors = FALSE
     )
     particles[[index]] <- data.frame(
@@ -471,7 +470,7 @@ main <- function() {
       training_points = nrow(training),
       quadrature_nodes = quadrature_nodes,
       log_tau_scale = log_tau_scale,
-      calibrated_log_asymptote_floor = calibrated_log_asymptote_floor,
+      calibrated_log_asymptote_floor = 0,
       tau_minimum = min(tau_values),
       tau_median = median(tau_values),
       tau_maximum = max(tau_values)
