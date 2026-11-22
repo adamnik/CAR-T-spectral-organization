@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--crossover-quantile-low", type=float, default=0.10)
     parser.add_argument("--crossover-quantile-high", type=float, default=0.90)
     parser.add_argument("--transition-scale-sd", type=float, default=0.10)
+    parser.add_argument("--midpoint-centered", action="store_true",
+                        help="Anchor the baseline log hazard at 50%% activation.")
     parser.add_argument("--draws", type=int, default=2000)
     parser.add_argument("--tune", type=int, default=2000)
     parser.add_argument("--chains", type=int, default=4)
@@ -55,6 +57,10 @@ def main():
     adjustment_matrix, adjustment_table = adjustment_design(data, adjustments)
     crossover_low = float(data.O_lambda_inf_central.quantile(args.crossover_quantile_low))
     crossover_high = float(data.O_lambda_inf_central.quantile(args.crossover_quantile_high))
+
+    if crossover_high <= crossover_low:
+        raise ValueError("The crossover prior has zero width on the observed cohort.")
+    activation_offset = 0.5 if args.midpoint_centered else 0.0
 
     print(
         f"Analysis cohort: {len(data):,} patients | "
@@ -85,7 +91,7 @@ def main():
         hazard = pt.exp(
             baseline_log_rate[:, None, :]
             + clinical_adjustment[:, None, None]
-            + patient_effect[:, None, None] * activation[:, :, None]
+            + patient_effect[:, None, None] * (activation[:, :, None] - activation_offset)
         )
         conditional_loglikelihood = interval_loglikelihood(hazard, arrays)
         patient_loglikelihood = marginalize_particles(conditional_loglikelihood, particle_weights)
@@ -159,6 +165,8 @@ def main():
             'lower': crossover_low,
             'upper': crossover_high,
         },
+        'hazard_activation_offset': activation_offset,
+        'baseline_reference': 'transition midpoint' if args.midpoint_centered else 'low plateau',
         'transition_scale_sd': args.transition_scale_sd,
         'draws': args.draws,
         'tune': args.tune,
