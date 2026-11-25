@@ -51,7 +51,7 @@ TCAT_GEP_Tph_CLR,TPH
 TCAT_GEP_Translation_CLR,Translation
 TCAT_GEP_Treg_CLR,Treg
 TCAT_GEP_gdT_CLR,γδ T
-TCAT_SCORE_ASA_CLR,Antigen-associated Activation
+TCAT_SCORE_ASA_CLR,Antigen-specific Activation
 TCAT_SCORE_Proliferation_CLR,Proliferation
 ATLAS_proportion_Apoptotic_T_cells_CLR,Apoptotic T cells
 ATLAS_proportion_CD4_central_memory_CLR,CD4 Central Memory
