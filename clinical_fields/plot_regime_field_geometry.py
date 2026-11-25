@@ -37,7 +37,7 @@ def main():
         ('z__prognostic_channeling', 1, 'Prognostic\nchanneling'),
         ('z__signed_graph_variation', -1, 'Signed graph\nvariation'),
         ('z__signed_neighbor_cosine', 1, 'Signed-neighbor\ncosine'),
-        ('joint_oriented_z', 1, 'Joint'),
+        ('joint_oriented_z', 1, r'$Z_{\mathrm{joint}}$'),
     ]
     FIELDS = [
         ('TCAT_GEP', 'TCAT GEP geometry\n(dataset-adjusted)'),

@@ -54,8 +54,8 @@ parse_plot_arguments <- function() {
 
 
 cutoff_title <- function(cutoff) {
-  if (cutoff == "full") return("full")
-  format(as.numeric(cutoff), big.mark = ",", scientific = FALSE)
+  if (cutoff == "full") return("All available cells")
+  paste("Data through n =", format(as.numeric(cutoff), big.mark = ",", scientific = FALSE))
 }
 
 
@@ -137,7 +137,7 @@ plot_patient <- function(
       xlab = "Infusion cells",
       ylab = expression(O[lambda]),
       main = sprintf(
-        "Data through n = %s\nasymptote %.3f [%.3f, %.3f]",
+        "%s\nasymptote %.3f [%.3f, %.3f]",
         cutoff_title(cutoff),
         result$O_lambda_inf_central[1],
         result$O_lambda_inf_q025[1],

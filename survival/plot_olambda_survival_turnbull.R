@@ -112,8 +112,10 @@ curve <- stepify(curve, data)
 colors <- c("Low Oλ" = "#2B6CB0", "High Oλ" = "#C43D4D")
 fills <- c("Low Oλ" = "#9EC5E8", "High Oλ" = "#E9A2AA")
 
+regime_labels <- expression("Low" ~ O[lambda], "High" ~ O[lambda])
+
 annotation <- sprintf(
-  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nP(β > 0) = %.3f\nCrossover Oλ = %.3f",
+  "Adjusted Bayesian HR %.2f (95%% CrI %.2f–%.2f)\nP(β > 0) = %.3f\nCrossover c = %.3f",
   model_result$HR_median[[1]],
   model_result$HR_q025[[1]],
   model_result$HR_q975[[1]],
@@ -139,8 +141,8 @@ figure <- ggplot(curve, aes(x = time, y = survival, color = regime, fill = regim
     lineheight = 1.15,
     color = "#202020"
   ) +
-  scale_color_manual(values = colors, name = NULL) +
-  scale_fill_manual(values = fills, name = NULL) +
+  scale_color_manual(values = colors, breaks = names(colors), labels = regime_labels, name = NULL) +
+  scale_fill_manual(values = fills, breaks = names(fills), labels = regime_labels, name = NULL) +
   scale_x_continuous(
     limits = c(0, x_max),
     breaks = pretty(c(0, x_max), n = 7),
