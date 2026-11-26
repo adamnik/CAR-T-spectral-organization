@@ -2,7 +2,7 @@
 
 by Adam Nik and Keenan Hartert
 
-preprint coming soon
+Preprint: [https://doi.org/10.64898/2026.11.24.768151](https://doi.org/10.64898/2026.11.24.768151)
 
 Analysis code for spectral organization, cell states, and survival across CAR T-cell infusion cohorts.
 
@@ -25,10 +25,3 @@ python -m pip install -r requirements.txt
 ```
 
 Use `--help` for Python script arguments. Run R scripts with `Rscript`; the asymptote model requires `nlme`, and spectral trajectory extraction requires a CUDA-enabled PyTorch build.
-
-## Checks
-
-```bash
-python -m unittest discover -s tests
-Rscript tests/test_asymptotes.R
-```
